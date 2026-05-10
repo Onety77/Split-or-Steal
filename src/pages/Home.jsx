@@ -9,7 +9,7 @@ const X_URL         = "https://x.com/REPLACE_YOUR_HANDLE";
 const COMMUNITY_URL = "https://x.com/i/communities/REPLACE";
 const TOKEN_CA      = "VuAy6VubBezBYzMurxDfJe6xcBWnaRhCcjzjGCqpump";
 const DUEL_INTERVAL = 10 * 60 * 1000;
-const isLive        = TOKEN_CA !== "PASTE_TOKEN_CA_HERE";
+const isLive        = TOKEN_CA !== "13SVgpzFcZf8vF6Tg1QV7vec82FdJrf4Kg2VEX4xpump";
 
 const short   = (a) => a ? `${a.slice(0,4)}...${a.slice(-4)}` : "—";
 const fmtSOL  = (n) => (!n && n !== 0) ? "—" : n.toFixed(4);
