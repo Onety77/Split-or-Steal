@@ -1,12 +1,12 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import {
   collection, query, orderBy, onSnapshot, doc,
-  setDoc, deleteDoc, updateDoc, serverTimestamp, getDoc,
+  setDoc, deleteDoc, updateDoc, serverTimestamp,
 } from "firebase/firestore";
 import { db } from "../firebase";
 import { useAuth } from "../context/AuthContext";
+import { requestNotificationPermission } from "../components/ReadyCheckOverlay";
 
-// ── Helpers ────────────────────────────────────────────────────────────────
 const positionLabel = (pos) => {
   if (pos === 1) return "YOU'RE NEXT";
   if (pos === 2) return "2ND IN LINE";
@@ -16,48 +16,21 @@ const positionLabel = (pos) => {
 export default function Queue({ navigate }) {
   const { user, profile } = useAuth();
 
-  const [queueList,   setQueueList]   = useState([]);
-  const [myEntry,     setMyEntry]     = useState(null);
-  const [joining,     setJoining]     = useState(false);
-  const [readyCd,     setReadyCd]     = useState(0); // 90s countdown
-  const [readyLoading,setReadyLoading]= useState(false);
-  const readyRef = useRef(null);
+  const [queueList, setQueueList] = useState([]);
+  const [myEntry,   setMyEntry]   = useState(null);
+  const [joining,   setJoining]   = useState(false);
 
-  // Live queue from Firestore
+  // Live queue
   useEffect(() => {
-    const q = query(
-      collection(db, "sos_queue"),
-      orderBy("joinedAt", "asc")
-    );
+    const q = query(collection(db, "sos_queue"), orderBy("joinedAt","asc"));
     return onSnapshot(q, snap => {
       const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       setQueueList(list);
-      if (user) {
-        const mine = list.find(e => e.uid === user.uid) || null;
-        setMyEntry(mine);
-
-        // Start ready check countdown if applicable
-        if (mine?.status === "ready_check" && mine?.readyCheckEndsAt) {
-          const ms = mine.readyCheckEndsAt.toMillis() - Date.now();
-          setReadyCd(Math.max(0, Math.floor(ms / 1000)));
-        }
-      }
+      if (user) setMyEntry(list.find(e => e.uid === user.uid) || null);
     });
   }, [user]);
 
-  // Ready check countdown ticker
-  useEffect(() => {
-    if (myEntry?.status !== "ready_check") return;
-    const id = setInterval(() => {
-      setReadyCd(p => {
-        if (p <= 1) { clearInterval(id); return 0; }
-        return p - 1;
-      });
-    }, 1000);
-    return () => clearInterval(id);
-  }, [myEntry?.status]);
-
-  // If engine puts us in_duel, navigate to duel room
+  // Navigate to duel room if engine puts us in_duel
   useEffect(() => {
     if (myEntry?.status === "in_duel" && myEntry?.currentDuelId) {
       navigate("duel");
@@ -68,12 +41,15 @@ export default function Queue({ navigate }) {
     if (!user || !profile) { navigate("auth"); return; }
     setJoining(true);
     try {
+      // Request notification permission when joining
+      await requestNotificationPermission();
+
       await setDoc(doc(db, "sos_queue", user.uid), {
-        uid:       user.uid,
-        username:  profile.username,
-        wallet:    profile.wallet,
-        joinedAt:  serverTimestamp(),
-        status:    "waiting",
+        uid:              user.uid,
+        username:         profile.username,
+        wallet:           profile.wallet,
+        joinedAt:         serverTimestamp(),
+        status:           "waiting",
         readyCheckEndsAt: null,
         currentDuelId:    null,
       });
@@ -86,31 +62,13 @@ export default function Queue({ navigate }) {
 
   const leaveQueue = async () => {
     if (!user) return;
-    try {
-      await deleteDoc(doc(db, "sos_queue", user.uid));
-    } catch (e) {
-      console.error(e);
-    }
+    try { await deleteDoc(doc(db, "sos_queue", user.uid)); } catch {}
   };
 
-  const clickReady = async () => {
-    if (!user || readyCd <= 0) return;
-    setReadyLoading(true);
-    try {
-      await updateDoc(doc(db, "sos_queue", user.uid), { status: "ready" });
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setReadyLoading(false);
-    }
-  };
-
-  // My position in queue
   const myPosition = myEntry
     ? queueList.findIndex(e => e.uid === user?.uid) + 1
     : null;
 
-  // Estimated wait (rough: each duel ~10 min, top 2 always in duel)
   const estimatedWait = myPosition
     ? Math.max(0, Math.ceil((myPosition - 2) / 2)) * 10
     : null;
@@ -119,103 +77,14 @@ export default function Queue({ navigate }) {
     <div className="page" style={{ padding:"100px 24px 80px" }}>
       <div style={{ maxWidth:"var(--max-w)", margin:"0 auto" }}>
 
-        {/* ── READY CHECK OVERLAY ─────────────────────────────── */}
-        {myEntry?.status === "ready_check" && (
-          <div style={{
-            position:"fixed", inset:0, zIndex:400,
-            background:"rgba(8,6,4,0.96)",
-            display:"flex", flexDirection:"column",
-            alignItems:"center", justifyContent:"center",
-            padding:24,
-            animation:"fade-in 0.3s ease",
-          }}>
-            {/* Pulsing glow */}
-            <div style={{
-              width:200, height:200, borderRadius:"50%",
-              background:"radial-gradient(circle, rgba(255,184,0,0.2), transparent 70%)",
-              position:"absolute",
-              animation:"glow-gold 2s ease-in-out infinite",
-            }}/>
-
-            <div style={{ textAlign:"center", position:"relative", zIndex:2, maxWidth:400 }}>
-              <div style={{
-                fontSize:64, marginBottom:16,
-                animation:"winner-burst 0.6s ease",
-              }}>⚔️</div>
-              <h2 style={{
-                fontFamily:"'Russo One',sans-serif",
-                fontSize:"clamp(28px,6vw,48px)",
-                letterSpacing:"0.08em",
-                color:"var(--gold)",
-                marginBottom:12,
-                animation:"countdown-urgent 1s ease infinite",
-              }}>YOU'RE UP!</h2>
-              <p style={{
-                fontFamily:"'Barlow',sans-serif",
-                fontSize:16, color:"var(--muted)",
-                lineHeight:1.7, marginBottom:32,
-              }}>
-                Your duel is starting. Click READY to enter the room.<br/>
-                If you don't respond in time, you'll be removed from the queue.
-              </p>
-
-              {/* Countdown */}
-              <div style={{
-                fontSize:72,
-                fontFamily:"'Russo One',sans-serif",
-                color: readyCd <= 20 ? "var(--red2)" : "var(--gold3)",
-                lineHeight:1,
-                marginBottom:32,
-                animation: readyCd <= 20 ? "countdown-urgent 0.8s ease infinite" : "none",
-              }}>{readyCd}</div>
-
-              {myEntry.status === "ready" ? (
-                <div style={{
-                  padding:"16px 40px",
-                  background:"rgba(0,200,83,0.1)",
-                  border:"1px solid rgba(0,200,83,0.3)",
-                  borderRadius:12,
-                  fontFamily:"'Russo One',sans-serif",
-                  fontSize:18, color:"var(--green)",
-                  letterSpacing:2,
-                }}>READY ✓ — WAITING FOR OPPONENT...</div>
-              ) : (
-                <button
-                  onClick={clickReady}
-                  disabled={readyLoading || readyCd <= 0}
-                  className="btn-gold"
-                  style={{ fontSize:20, padding:"18px 56px", letterSpacing:4 }}
-                >
-                  {readyCd <= 0 ? "TIME'S UP" : readyLoading ? "..." : "READY"}
-                </button>
-              )}
-
-              <p style={{
-                marginTop:20,
-                fontSize:12, color:"var(--dim)",
-                fontFamily:"'Barlow',sans-serif",
-              }}>
-                Not ready right now?{" "}
-                <button onClick={leaveQueue} style={{
-                  background:"none", border:"none", cursor:"pointer",
-                  color:"var(--red2)", fontSize:12,
-                  fontFamily:"'Barlow',sans-serif",
-                  textDecoration:"underline",
-                }}>Leave the queue</button>
-              </p>
-            </div>
-          </div>
-        )}
-
-        {/* ── HEADER ──────────────────────────────────────────── */}
+        {/* Header */}
         <div style={{ marginBottom:48 }}>
           <div className="label" style={{ marginBottom:12 }}>WAITING ROOM</div>
           <h1 style={{
             fontFamily:"'Russo One',sans-serif",
             fontSize:"clamp(32px,6vw,56px)",
             letterSpacing:"0.08em",
-            color:"var(--text)",
-            marginBottom:12,
+            color:"var(--text)", marginBottom:12,
           }}>THE QUEUE</h1>
           <p style={{
             fontFamily:"'Barlow',sans-serif",
@@ -230,21 +99,20 @@ export default function Queue({ navigate }) {
         <div style={{
           display:"grid",
           gridTemplateColumns:"repeat(auto-fit,minmax(300px,1fr))",
-          gap:24,
-          alignItems:"start",
+          gap:24, alignItems:"start",
         }}>
 
-          {/* ── LEFT: Queue list ─────────────────────────────── */}
+          {/* LEFT: status + how it works */}
           <div>
-            {/* Your status card */}
+
+            {/* Your status */}
             {user && profile && (
               <div style={{ marginBottom:16 }}>
                 {!myEntry ? (
                   <div className="card" style={{
                     border:"1px solid rgba(255,184,0,0.25)",
                     display:"flex", alignItems:"center",
-                    justifyContent:"space-between", gap:16,
-                    flexWrap:"wrap",
+                    justifyContent:"space-between", gap:16, flexWrap:"wrap",
                   }}>
                     <div>
                       <div className="label" style={{ marginBottom:6, color:"var(--muted)" }}>YOUR STATUS</div>
@@ -261,7 +129,10 @@ export default function Queue({ navigate }) {
                     border:"1px solid rgba(0,200,83,0.2)",
                     background:"rgba(0,200,83,0.04)",
                   }}>
-                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:12 }}>
+                    <div style={{
+                      display:"flex", justifyContent:"space-between",
+                      alignItems:"center", flexWrap:"wrap", gap:12,
+                    }}>
                       <div>
                         <div className="label" style={{ marginBottom:6, color:"var(--green)" }}>
                           {myPosition ? positionLabel(myPosition) : "IN QUEUE"}
@@ -274,11 +145,11 @@ export default function Queue({ navigate }) {
                             ~{estimatedWait} min estimated wait
                           </div>
                         )}
-                        {myPosition === 1 || myPosition === 2 ? (
+                        {(myPosition === 1 || myPosition === 2) && (
                           <div style={{ fontSize:12, color:"var(--gold)", marginTop:4, fontFamily:"'Barlow',sans-serif" }}>
                             ⚡ Your duel is starting soon — stay ready!
                           </div>
-                        ) : null}
+                        )}
                       </div>
                       <button onClick={leaveQueue} className="btn-outline"
                         style={{ color:"var(--red2)", borderColor:"rgba(204,32,32,0.3)", fontSize:12 }}>
@@ -295,11 +166,21 @@ export default function Queue({ navigate }) {
                       Waiting for your opponent to ready up...
                     </p>
                   </div>
+                ) : myEntry.status === "in_duel" ? (
+                  <div className="card" style={{ border:"1px solid rgba(255,184,0,0.3)", textAlign:"center" }}>
+                    <div style={{ fontFamily:"'Russo One',sans-serif", fontSize:18, color:"var(--gold)", letterSpacing:2 }}>
+                      ⚔️ DUEL IN PROGRESS
+                    </div>
+                    <button onClick={() => navigate("duel")} className="btn-gold"
+                      style={{ marginTop:14 }}>
+                      ENTER DUEL ROOM
+                    </button>
+                  </div>
                 ) : null}
               </div>
             )}
 
-            {/* Not signed in CTA */}
+            {/* Not signed in */}
             {!user && (
               <div className="card" style={{
                 border:"1px solid rgba(255,184,0,0.2)",
@@ -319,21 +200,19 @@ export default function Queue({ navigate }) {
               </div>
             )}
 
-            {/* How queue works */}
+            {/* How it works */}
             <div className="card" style={{ padding:"20px 24px" }}>
               <div className="label" style={{ marginBottom:14, color:"var(--muted)" }}>HOW THE QUEUE WORKS</div>
               {[
-                ["01", "Sign in and click Join Queue — your username appears in the list below."],
-                ["02", "Every 10 minutes, the top 2 in queue get called to duel."],
-                ["03", "You have 90 seconds to click READY or you're ejected."],
-                ["04", "Click READY → chat opens → vote in secret → reveal."],
-                ["05", "After your duel, rejoin the queue to play again."],
+                ["01", "Sign in and click Join Queue. Your username appears in the live list."],
+                ["02", "Every 10 minutes, the top 2 in queue are called to duel."],
+                ["03", "A full-screen alert fires with sound and a browser notification — 90 seconds to click READY."],
+                ["04", "READY unlocks the chat room. Vote in secret. Reveal happens simultaneously."],
+                ["05", "After your duel, rejoin to play again."],
               ].map(([n, t]) => (
                 <div key={n} style={{
                   display:"flex", gap:14, alignItems:"flex-start",
-                  paddingBottom:12,
-                  borderBottom:"1px solid var(--border)",
-                  marginBottom:12,
+                  paddingBottom:12, borderBottom:"1px solid var(--border)", marginBottom:12,
                 }}>
                   <span style={{
                     fontFamily:"'Russo One',sans-serif",
@@ -346,7 +225,7 @@ export default function Queue({ navigate }) {
             </div>
           </div>
 
-          {/* ── RIGHT: Live queue list ────────────────────────── */}
+          {/* RIGHT: Live queue list */}
           <div>
             <div style={{ marginBottom:16, display:"flex", alignItems:"center", gap:10 }}>
               <div style={{
@@ -357,8 +236,7 @@ export default function Queue({ navigate }) {
               }}/>
               <span style={{
                 fontFamily:"'Oswald',sans-serif",
-                fontSize:11, fontWeight:600, letterSpacing:4,
-                color:"var(--muted)",
+                fontSize:11, fontWeight:600, letterSpacing:4, color:"var(--muted)",
               }}>LIVE QUEUE — {queueList.length} WAITING</span>
             </div>
 
@@ -373,7 +251,7 @@ export default function Queue({ navigate }) {
             ) : (
               <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
                 {queueList.map((entry, i) => {
-                  const isMe = user && entry.uid === user.uid;
+                  const isMe  = user && entry.uid === user.uid;
                   const isTop = i < 2;
                   const statusIcon =
                     entry.status === "ready"       ? "✓" :
@@ -382,11 +260,8 @@ export default function Queue({ navigate }) {
 
                   return (
                     <div key={entry.id} style={{
-                      display:"flex",
-                      alignItems:"center",
-                      gap:14,
-                      padding:"14px 18px",
-                      borderRadius:10,
+                      display:"flex", alignItems:"center", gap:14,
+                      padding:"14px 18px", borderRadius:10,
                       background: isMe  ? "rgba(255,184,0,0.08)"
                                 : isTop ? "rgba(255,255,255,0.03)"
                                 :         "rgba(255,255,255,0.015)",
@@ -394,22 +269,17 @@ export default function Queue({ navigate }) {
                         isMe  ? "rgba(255,184,0,0.3)"
                       : isTop ? "rgba(255,184,0,0.12)"
                       :         "rgba(255,255,255,0.05)"}`,
-                      transition:"all 0.3s",
                       animation:`slide-up 0.4s ease ${i*0.04}s both`,
                     }}>
-
-                      {/* Position */}
                       <div style={{
                         width:28, height:28, borderRadius:"50%",
                         display:"flex", alignItems:"center", justifyContent:"center",
                         background: isTop ? "rgba(255,184,0,0.15)" : "rgba(255,255,255,0.04)",
-                        fontFamily:"'Russo One',sans-serif",
-                        fontSize:12,
+                        fontFamily:"'Russo One',sans-serif", fontSize:12,
                         color: isTop ? "var(--gold)" : "var(--dim)",
                         flexShrink:0,
                       }}>{i + 1}</div>
 
-                      {/* Name */}
                       <div style={{ flex:1, minWidth:0 }}>
                         <div style={{
                           fontFamily:"'Oswald',sans-serif",
@@ -427,27 +297,26 @@ export default function Queue({ navigate }) {
                         )}
                       </div>
 
-                      {/* Status badge */}
                       {statusIcon && (
                         <div style={{
                           fontFamily:"'Oswald',sans-serif",
                           fontSize:11, fontWeight:600, letterSpacing:1,
-                          color: entry.status==="ready" ? "var(--green)"
-                               : entry.status==="in_duel" ? "var(--gold)"
+                          color: entry.status==="ready"       ? "var(--green)"
+                               : entry.status==="in_duel"    ? "var(--gold)"
                                : "var(--muted)",
-                          background: entry.status==="ready" ? "rgba(0,200,83,0.1)"
-                                    : entry.status==="in_duel" ? "rgba(255,184,0,0.1)"
+                          background: entry.status==="ready"    ? "rgba(0,200,83,0.1)"
+                                    : entry.status==="in_duel"  ? "rgba(255,184,0,0.1)"
                                     : "rgba(255,255,255,0.04)",
                           border:`1px solid ${
-                            entry.status==="ready" ? "rgba(0,200,83,0.25)"
+                            entry.status==="ready"   ? "rgba(0,200,83,0.25)"
                           : entry.status==="in_duel" ? "rgba(255,184,0,0.25)"
                           : "rgba(255,255,255,0.08)"}`,
-                          borderRadius:20, padding:"4px 10px",
-                          flexShrink:0,
+                          borderRadius:20, padding:"4px 10px", flexShrink:0,
                         }}>
-                          {statusIcon} {entry.status==="ready" ? "READY"
-                                      : entry.status==="in_duel" ? "DUELING"
-                                      : "WAITING"}
+                          {statusIcon}{" "}
+                          {entry.status==="ready"       ? "READY"
+                         : entry.status==="in_duel"    ? "DUELING"
+                         : "WAITING"}
                         </div>
                       )}
                     </div>

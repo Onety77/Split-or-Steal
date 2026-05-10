@@ -1,16 +1,16 @@
 import { useState, useEffect } from "react";
 import { AuthProvider } from "./context/AuthContext";
-import Header from "./components/Header";
-import Home   from "./pages/Home";
-import Auth   from "./pages/Auth";
-import Queue  from "./pages/Queue";
-import About  from "./pages/About";
-import Duel   from "./pages/Duel";
+import Header             from "./components/Header";
+import ReadyCheckOverlay  from "./components/ReadyCheckOverlay";
+import Home               from "./pages/Home";
+import Auth               from "./pages/Auth";
+import Queue              from "./pages/Queue";
+import About              from "./pages/About";
+import Duel               from "./pages/Duel";
 
-// Simple path-based router using history API
 function useRouter() {
   const getPage = () => {
-    const p = window.location.pathname.replace("/","") || "home";
+    const p = window.location.pathname.replace("/", "") || "home";
     return ["home","auth","queue","about","duel"].includes(p) ? p : "home";
   };
   const [page, setPage] = useState(getPage);
@@ -32,12 +32,15 @@ function useRouter() {
 
 function AppInner() {
   const { page, navigate } = useRouter();
-
   const hideHeader = page === "duel";
 
   return (
     <>
+      {/* Global ready check overlay — shows on every page */}
+      <ReadyCheckOverlay/>
+
       {!hideHeader && <Header navigate={navigate} currentPage={page}/>}
+
       {page === "home"  && <Home  navigate={navigate}/>}
       {page === "auth"  && <Auth  navigate={navigate}/>}
       {page === "queue" && <Queue navigate={navigate}/>}
