@@ -5,12 +5,13 @@ import {
 import { db } from "../firebase";
 import Orb from "../components/Orb";
 
+// ─── CONFIG ────────────────────────────────────────────────────────────────
 const X_URL         = "https://x.com/REPLACE_YOUR_HANDLE";
 const COMMUNITY_URL = "https://x.com/i/communities/REPLACE";
-const TOKEN_CA      = "VuAy6VubBezBYzMurxDfJe6xcBWnaRhCcjzjGCqpump";
+const TOKEN_CA      = "13SVgpzFcZf8vF6Tg1QV7vec82FdJrf4Kg2VEX4xpump";
 const DUEL_INTERVAL = 10 * 60 * 1000;
-const isLive        = TOKEN_CA !== "13SVgpzFcZf8vF6Tg1QV7vec82FdJrf4Kg2VEX4xpump";
 
+// ─── HELPERS ───────────────────────────────────────────────────────────────
 const short   = (a) => a ? `${a.slice(0,4)}...${a.slice(-4)}` : "—";
 const fmtSOL  = (n) => (!n && n !== 0) ? "—" : n.toFixed(4);
 const timeAgo = (ms) => {
@@ -21,26 +22,39 @@ const timeAgo = (ms) => {
   return `${Math.floor(s/86400)}d ago`;
 };
 const outcomeLabel = (d) => {
-  if (d.outcome === "BOTH_SPLIT")  return "Both Split 🤝";
-  if (d.outcome === "BOTH_STEAL")  return "Both Stole 💀";
-  if (d.vote1 === "STEAL")         return "P1 Betrayed 🗡️";
+  if (d.outcome === "BOTH_SPLIT") return "Both Split 🤝";
+  if (d.outcome === "BOTH_STEAL") return "Both Stole 💀";
+  if (d.vote1 === "STEAL")        return "P1 Betrayed 🗡️";
   return "P2 Betrayed 🗡️";
 };
 const outcomeColor = (o) => {
-  if (o === "BOTH_SPLIT")  return "var(--green)";
-  if (o === "BOTH_STEAL")  return "var(--slate)";
+  if (o === "BOTH_SPLIT") return "var(--green)";
+  if (o === "BOTH_STEAL") return "var(--slate)";
   return "var(--red2)";
 };
 
-const PARTICLES = Array.from({ length: 20 }, (_, i) => ({
+// ─── REACTIVE WINDOW WIDTH HOOK ────────────────────────────────────────────
+function useWindowWidth() {
+  const [width, setWidth] = useState(window.innerWidth);
+  useEffect(() => {
+    const handle = () => setWidth(window.innerWidth);
+    window.addEventListener("resize", handle);
+    return () => window.removeEventListener("resize", handle);
+  }, []);
+  return width;
+}
+
+// ─── PARTICLES ─────────────────────────────────────────────────────────────
+const PARTICLES = Array.from({ length: 18 }, (_, i) => ({
   id:    i,
-  left:  `${(i * 5.1 + 1.3) % 100}%`,
+  left:  `${(i * 5.6 + 1.3) % 100}%`,
   dur:   `${13 + ((i * 2.8) % 10)}s`,
   delay: `${(i * 1.6) % 13}s`,
   size:  i % 5 === 0 ? 3 : 2,
   type:  i % 4,
 }));
 
+// ─── MINI RING ─────────────────────────────────────────────────────────────
 const R2 = 44;
 const C2 = 2 * Math.PI * R2;
 
@@ -51,11 +65,12 @@ function MiniRing({ countdown, total }) {
   const secs   = Math.floor((countdown % 60000) / 1000);
   const str    = `${String(mins).padStart(2,"0")}:${String(secs).padStart(2,"0")}`;
   const urgent = countdown < 60000;
-
   return (
     <div style={{ position:"relative", width:100, height:100 }}>
-      <svg width="100" height="100" viewBox="0 0 100 100" style={{ transform:"rotate(-90deg)" }}>
-        <circle cx="50" cy="50" r={R2} fill="none" stroke="rgba(255,184,0,0.07)" strokeWidth="3"/>
+      <svg width="100" height="100" viewBox="0 0 100 100"
+        style={{ transform:"rotate(-90deg)" }}>
+        <circle cx="50" cy="50" r={R2} fill="none"
+          stroke="rgba(255,184,0,0.07)" strokeWidth="3"/>
         <circle cx="50" cy="50" r={R2} fill="none"
           stroke={urgent ? "#FF3333" : "#FFB800"} strokeWidth="3"
           strokeLinecap="round" strokeDasharray={C2} strokeDashoffset={offset}
@@ -77,7 +92,102 @@ function MiniRing({ countdown, total }) {
   );
 }
 
+// ─── ORB SECTION: mobile stacks vertically, desktop side-by-side ───────────
+function OrbSection({ isMobile }) {
+  const orbSize = isMobile ? 130 : 190;
+
+  if (isMobile) {
+    // ── MOBILE: clean vertical stack, everything centered ──────────────────
+    return (
+      <div style={{
+        display:"flex",
+        flexDirection:"column",
+        alignItems:"center",
+        gap:0,
+        width:"100%",
+        marginBottom:44,
+      }}>
+        {/* SPLIT */}
+        <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:12 }}>
+          <Orb type="SPLIT" size={orbSize}/>
+          <p style={{
+            fontFamily:"'Oswald',sans-serif",
+            fontSize:11, fontWeight:600, letterSpacing:3,
+            color:"var(--gold)", margin:0,
+          }}>SHARE THE POT</p>
+        </div>
+
+        {/* VS divider */}
+        <div style={{
+          display:"flex", flexDirection:"column", alignItems:"center",
+          padding:"18px 0",
+        }}>
+          <div style={{ width:1, height:20, background:"rgba(255,184,0,0.15)" }}/>
+          <span style={{
+            fontFamily:"'Russo One',sans-serif",
+            fontSize:16, color:"var(--dim)", letterSpacing:4,
+            padding:"8px 0",
+          }}>VS</span>
+          <div style={{ width:1, height:20, background:"rgba(255,184,0,0.15)" }}/>
+        </div>
+
+        {/* STEAL */}
+        <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:12 }}>
+          <Orb type="STEAL" size={orbSize}/>
+          <p style={{
+            fontFamily:"'Oswald',sans-serif",
+            fontSize:11, fontWeight:600, letterSpacing:3,
+            color:"var(--red2)", margin:0,
+          }}>TAKE IT ALL</p>
+        </div>
+      </div>
+    );
+  }
+
+  // ── DESKTOP: side by side ─────────────────────────────────────────────────
+  return (
+    <div style={{
+      display:"flex",
+      flexDirection:"row",
+      alignItems:"center",
+      justifyContent:"center",
+      gap:64,
+      marginBottom:52,
+      animation:"slide-up 0.9s ease 0.7s both",
+    }}>
+      <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:16 }}>
+        <Orb type="SPLIT" size={orbSize}/>
+        <p style={{
+          fontFamily:"'Oswald',sans-serif",
+          fontSize:12, fontWeight:600, letterSpacing:3,
+          color:"var(--gold)", margin:0,
+        }}>SHARE THE POT</p>
+      </div>
+
+      <div style={{ textAlign:"center" }}>
+        <span style={{
+          fontFamily:"'Russo One',sans-serif",
+          fontSize:24, color:"var(--dim)", letterSpacing:4,
+        }}>VS</span>
+      </div>
+
+      <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:16 }}>
+        <Orb type="STEAL" size={orbSize}/>
+        <p style={{
+          fontFamily:"'Oswald',sans-serif",
+          fontSize:12, fontWeight:600, letterSpacing:3,
+          color:"var(--red2)", margin:0,
+        }}>TAKE IT ALL</p>
+      </div>
+    </div>
+  );
+}
+
+// ─── HOME ──────────────────────────────────────────────────────────────────
 export default function Home({ navigate }) {
+  const width     = useWindowWidth();
+  const isMobile  = width < 640;
+
   const [stats,     setStats]     = useState(null);
   const [duels,     setDuels]     = useState([]);
   const [countdown, setCountdown] = useState(DUEL_INTERVAL);
@@ -85,8 +195,14 @@ export default function Home({ navigate }) {
   const nextDuelRef = useRef(null);
 
   useEffect(() => {
-    const q = query(collection(db,"sos_duels"), orderBy("timestamp","desc"), limit(6));
-    return onSnapshot(q, snap => setDuels(snap.docs.map(d => ({ id:d.id,...d.data() }))));
+    const q = query(
+      collection(db, "sos_duels"),
+      orderBy("timestamp","desc"),
+      limit(6)
+    );
+    return onSnapshot(q, snap =>
+      setDuels(snap.docs.map(d => ({ id:d.id, ...d.data() })))
+    );
   }, []);
 
   useEffect(() => {
@@ -114,19 +230,19 @@ export default function Home({ navigate }) {
   }, []);
 
   const copyCA = () => {
-    if (!isLive) return;
     navigator.clipboard.writeText(TOKEN_CA);
     setCopiedCA(true);
     setTimeout(() => setCopiedCA(false), 2200);
   };
 
-  const activeDuel  = stats?.activeDuel   ?? null;
-  const currentPot  = stats?.currentPotSOL ?? null;
+  const activeDuel  = stats?.activeDuel       ?? null;
+  const currentPot  = stats?.currentPotSOL    ?? null;
   const totalPaid   = stats?.totalDistributed ?? 0;
-  const totalRounds = stats?.totalRounds  ?? 0;
-  const totalSplits = stats?.totalSplits  ?? 0;
-  const totalSteals = stats?.totalSteals  ?? 0;
-  const biggestPot  = stats?.biggestPot   ?? 0;
+  const totalRounds = stats?.totalRounds      ?? 0;
+  const totalSplits = stats?.totalSplits      ?? 0;
+  const totalSteals = stats?.totalSteals      ?? 0;
+  const biggestPot  = stats?.biggestPot       ?? 0;
+  const pad         = isMobile ? "0 16px" : "0 24px";
 
   return (
     <div className="page">
@@ -145,23 +261,26 @@ export default function Home({ navigate }) {
         }}/>
       ))}
 
-      {/* ── HERO ──────────────────────────────────────────────── */}
+      {/* ══════════════════════════════════════════════════════════
+          HERO
+      ══════════════════════════════════════════════════════════ */}
       <section style={{
         position:"relative",
         minHeight:"100vh",
         display:"flex", flexDirection:"column",
         alignItems:"center", justifyContent:"center",
-        padding:"90px 20px 64px",
+        padding: isMobile ? "88px 20px 60px" : "100px 24px 72px",
         overflow:"hidden",
         textAlign:"center",
       }}>
-        {/* BG */}
+        {/* BG image */}
         <div style={{
           position:"absolute", inset:0,
           backgroundImage:"url('/bg.jpg')",
           backgroundSize:"cover", backgroundPosition:"center",
           opacity:0.1,
         }}/>
+        {/* Spotlights */}
         <div style={{
           position:"absolute", inset:0,
           background:"radial-gradient(ellipse at 25% 0%, rgba(255,184,0,0.18) 0%, transparent 55%)",
@@ -170,6 +289,7 @@ export default function Home({ navigate }) {
           position:"absolute", inset:0,
           background:"radial-gradient(ellipse at 75% 0%, rgba(255,184,0,0.14) 0%, transparent 55%)",
         }}/>
+        {/* Bottom fade */}
         <div style={{
           position:"absolute", bottom:0, left:0, right:0, height:"25%",
           background:"linear-gradient(to bottom, transparent, var(--bg))",
@@ -180,18 +300,20 @@ export default function Home({ navigate }) {
           {/* Eyebrow */}
           <p style={{
             fontFamily:"'Oswald',sans-serif",
-            fontSize:11, fontWeight:500, letterSpacing:7,
-            color:"var(--gold)", marginBottom:18,
+            fontSize: isMobile ? 9 : 11,
+            fontWeight:500,
+            letterSpacing: isMobile ? 5 : 7,
+            color:"var(--gold)", marginBottom:16,
             animation:"fade-in 0.7s ease 0.2s both",
           }}>ON-CHAIN · REAL MONEY · REAL BETRAYAL</p>
 
-          {/* Title */}
+          {/* Main title */}
           <h1 style={{
             fontFamily:"'Russo One',sans-serif",
-            fontSize:"clamp(52px,13vw,120px)",
-            letterSpacing:"0.12em",
-            lineHeight:0.9,
-            marginBottom:24,
+            fontSize: isMobile ? "clamp(52px,16vw,72px)" : "clamp(72px,11vw,120px)",
+            letterSpacing: isMobile ? "0.08em" : "0.12em",
+            lineHeight:0.88,
+            marginBottom: isMobile ? 18 : 24,
             animation:"fade-in 0.8s ease 0.3s both",
             background:"linear-gradient(160deg,#FFE566 0%,#FFB800 40%,#FF8C00 70%,#F5EDD8 100%)",
             WebkitBackgroundClip:"text",
@@ -203,9 +325,10 @@ export default function Home({ navigate }) {
           {/* Tagline */}
           <p style={{
             fontFamily:"'Barlow',sans-serif",
-            fontSize:"clamp(14px,3.5vw,18px)",
+            fontSize: isMobile ? 14 : 18,
             fontWeight:300, color:"var(--muted)",
-            maxWidth:400, margin:"0 auto 48px",
+            maxWidth: isMobile ? 300 : 420,
+            margin: isMobile ? "0 auto 36px" : "0 auto 48px",
             lineHeight:1.65,
             animation:"fade-in 0.8s ease 0.6s both",
           }}>
@@ -213,58 +336,8 @@ export default function Home({ navigate }) {
             Trust or betray — on-chain.
           </p>
 
-          {/* ── ORBS — stacked on mobile, side by side on desktop ── */}
-          <div style={{
-            display:"flex",
-            flexDirection:"column",
-            alignItems:"center",
-            gap:32,
-            marginBottom:48,
-            animation:"slide-up 0.9s ease 0.7s both",
-          }}>
-            {/* Mobile: vertical stack. Desktop: horizontal row */}
-            <div style={{
-              display:"flex",
-              flexDirection:"row",
-              alignItems:"center",
-              justifyContent:"center",
-              gap:"clamp(24px,6vw,72px)",
-              flexWrap:"wrap",
-              width:"100%",
-            }}>
-              {/* SPLIT orb */}
-              <div style={{ textAlign:"center" }}>
-                <Orb type="SPLIT" size={Math.min(180, window.innerWidth * 0.38)}/>
-                <p style={{
-                  marginTop:14,
-                  fontFamily:"'Oswald',sans-serif",
-                  fontSize:11, fontWeight:600, letterSpacing:3,
-                  color:"var(--gold)",
-                }}>SHARE THE POT</p>
-              </div>
-
-              {/* VS */}
-              <div>
-                <span style={{
-                  fontFamily:"'Russo One',sans-serif",
-                  fontSize:"clamp(18px,4vw,24px)",
-                  color:"var(--dim)", letterSpacing:4,
-                  display:"block",
-                }}>VS</span>
-              </div>
-
-              {/* STEAL orb */}
-              <div style={{ textAlign:"center" }}>
-                <Orb type="STEAL" size={Math.min(180, window.innerWidth * 0.38)}/>
-                <p style={{
-                  marginTop:14,
-                  fontFamily:"'Oswald',sans-serif",
-                  fontSize:11, fontWeight:600, letterSpacing:3,
-                  color:"var(--red2)",
-                }}>TAKE IT ALL</p>
-              </div>
-            </div>
-          </div>
+          {/* ── ORBS ── */}
+          <OrbSection isMobile={isMobile}/>
 
           {/* CTA buttons */}
           <div style={{
@@ -275,38 +348,35 @@ export default function Home({ navigate }) {
             animation:"slide-up 0.8s ease 0.9s both",
           }}>
             <button onClick={() => navigate("queue")} className="btn-gold"
-              style={{ fontSize:15, padding:"15px 44px", width:"100%", maxWidth:320 }}>
+              style={{
+                fontSize: isMobile ? 14 : 15,
+                padding: isMobile ? "14px 0" : "15px 44px",
+                width: isMobile ? "100%" : "auto",
+                maxWidth: 320,
+              }}>
               JOIN THE QUEUE
             </button>
             <button onClick={() => navigate("about")} className="btn-outline"
-              style={{ fontSize:14, padding:"13px 40px", width:"100%", maxWidth:320 }}>
+              style={{
+                fontSize: isMobile ? 13 : 14,
+                padding: isMobile ? "12px 0" : "13px 40px",
+                width: isMobile ? "100%" : "auto",
+                maxWidth: 320,
+              }}>
               HOW IT WORKS
             </button>
           </div>
         </div>
-
-        {/* Scroll hint — hide on short screens */}
-        <div style={{
-          position:"absolute", bottom:20,
-          left:"50%", transform:"translateX(-50%)",
-          display:"flex", flexDirection:"column",
-          alignItems:"center", gap:6,
-          opacity:0.3,
-          animation:"fade-in 1s ease 2s both",
-        }}>
-          <span style={{ fontSize:9, letterSpacing:4, fontFamily:"'Oswald',sans-serif", color:"var(--muted)" }}>
-            SCROLL
-          </span>
-          <div style={{ width:1, height:24, background:"var(--border)" }}/>
-        </div>
       </section>
 
-      {/* ── STATS ─────────────────────────────────────────────── */}
-      <section style={{ padding:"0 20px 56px", maxWidth:"var(--max-w)", margin:"0 auto" }}>
+      {/* ══════════════════════════════════════════════════════════
+          STATS
+      ══════════════════════════════════════════════════════════ */}
+      <section style={{ padding:pad, paddingBottom:52, maxWidth:"var(--max-w)", margin:"0 auto" }}>
         <div style={{
           display:"grid",
           gridTemplateColumns:"1fr 1fr",
-          gap:12,
+          gap: isMobile ? 10 : 14,
         }}>
           {[
             { label:"CURRENT POT",    value: currentPot !== null ? `◎ ${fmtSOL(currentPot)}` : "—", accent:true },
@@ -318,26 +388,30 @@ export default function Home({ navigate }) {
               style={{
                 background: s.accent ? "rgba(255,184,0,0.07)" : undefined,
                 border: s.accent ? "1px solid rgba(255,184,0,0.25)" : undefined,
-                padding:"16px 18px",
+                padding: isMobile ? "14px 14px" : "18px 22px",
               }}>
               <div className="label" style={{ marginBottom:8, fontSize:8 }}>{s.label}</div>
               <div style={{
                 fontFamily:"'Russo One',sans-serif",
-                fontSize:"clamp(16px,4vw,22px)",
+                fontSize: isMobile ? "clamp(14px,4vw,18px)" : 22,
                 color: s.accent ? "var(--gold)" : "var(--text)",
+                wordBreak:"break-word",
               }}>{s.value}</div>
             </div>
           ))}
         </div>
       </section>
 
-      {/* ── LIVE DUEL ─────────────────────────────────────────── */}
-      <section style={{ padding:"0 20px 56px", maxWidth:"var(--max-w)", margin:"0 auto" }}>
-        <div style={{ marginBottom:20 }}>
+      {/* ══════════════════════════════════════════════════════════
+          LIVE DUEL
+      ══════════════════════════════════════════════════════════ */}
+      <section style={{ padding:pad, paddingBottom:52, maxWidth:"var(--max-w)", margin:"0 auto" }}>
+        <div style={{ marginBottom:18 }}>
           <span className="label" style={{ color:"var(--gold)" }}>● LIVE</span>
           <h2 style={{
             fontFamily:"'Russo One',sans-serif",
-            fontSize:"clamp(22px,5vw,30px)", letterSpacing:"0.08em",
+            fontSize: isMobile ? 22 : 30,
+            letterSpacing:"0.08em",
             color:"var(--text)", marginTop:8,
           }}>CURRENT DUEL</h2>
         </div>
@@ -347,103 +421,91 @@ export default function Home({ navigate }) {
             border:"1px solid rgba(255,184,0,0.25)",
             animation:"glow-gold 4s ease-in-out infinite",
             position:"relative", overflow:"hidden",
+            padding: isMobile ? "20px 16px" : "28px",
           }}>
             <div style={{
               position:"absolute", top:0, left:0, right:0, height:3,
               background:"linear-gradient(90deg,var(--gold2),var(--gold3),var(--gold2))",
-              backgroundSize:"200%",
-              animation:"shine 2s linear infinite",
+              backgroundSize:"200%", animation:"shine 2s linear infinite",
             }}/>
-            {/* On mobile: stack vertically */}
             <div style={{
-              display:"flex",
-              flexDirection:"column",
-              alignItems:"center",
-              gap:16,
+              display:"flex", alignItems:"center",
+              justifyContent:"space-between", gap:8,
             }}>
-              <div style={{
-                display:"flex",
-                alignItems:"center",
-                justifyContent:"space-between",
-                width:"100%",
-                gap:12,
-              }}>
-                {/* P1 */}
-                <div style={{ textAlign:"center", flex:1 }}>
-                  <div className="label" style={{ marginBottom:8, color:"var(--muted)", fontSize:8 }}>PLAYER 1</div>
-                  <div style={{
-                    fontFamily:"'Oswald',sans-serif",
-                    fontSize:"clamp(14px,4vw,18px)", fontWeight:600,
-                    overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap",
-                  }}>
-                    {activeDuel.player1Username || short(activeDuel.player1)}
-                  </div>
-                </div>
-
-                {/* Timer */}
-                <div style={{ textAlign:"center", flexShrink:0 }}>
-                  <MiniRing countdown={countdown} total={5*60*1000}/>
-                </div>
-
-                {/* P2 */}
-                <div style={{ textAlign:"center", flex:1 }}>
-                  <div className="label" style={{ marginBottom:8, color:"var(--muted)", fontSize:8 }}>PLAYER 2</div>
-                  <div style={{
-                    fontFamily:"'Oswald',sans-serif",
-                    fontSize:"clamp(14px,4vw,18px)", fontWeight:600,
-                    overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap",
-                  }}>
-                    {activeDuel.player2Username || short(activeDuel.player2)}
-                  </div>
-                </div>
+              {/* P1 */}
+              <div style={{ textAlign:"center", flex:1, minWidth:0 }}>
+                <div className="label" style={{ marginBottom:6, color:"var(--muted)", fontSize:8 }}>P1</div>
+                <div style={{
+                  fontFamily:"'Oswald',sans-serif",
+                  fontSize: isMobile ? 13 : 17, fontWeight:600,
+                  overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap",
+                }}>{activeDuel.player1Username || short(activeDuel.player1)}</div>
               </div>
 
-              {/* Pot */}
-              <div style={{
-                fontFamily:"'Russo One',sans-serif",
-                fontSize:"clamp(18px,5vw,24px)",
-                color:"var(--gold)", textAlign:"center",
-              }}>
-                ◎ {fmtSOL(activeDuel.amount)}
-                <span style={{ color:"var(--muted)", fontSize:12, marginLeft:8 }}>at stake</span>
+              {/* Timer */}
+              <div style={{ flexShrink:0 }}>
+                <MiniRing countdown={countdown} total={5*60*1000}/>
               </div>
+
+              {/* P2 */}
+              <div style={{ textAlign:"center", flex:1, minWidth:0 }}>
+                <div className="label" style={{ marginBottom:6, color:"var(--muted)", fontSize:8 }}>P2</div>
+                <div style={{
+                  fontFamily:"'Oswald',sans-serif",
+                  fontSize: isMobile ? 13 : 17, fontWeight:600,
+                  overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap",
+                }}>{activeDuel.player2Username || short(activeDuel.player2)}</div>
+              </div>
+            </div>
+
+            <div style={{
+              textAlign:"center", marginTop:16,
+              fontFamily:"'Russo One',sans-serif",
+              fontSize: isMobile ? 18 : 22,
+              color:"var(--gold)",
+            }}>
+              ◎ {fmtSOL(activeDuel.amount)}
+              <span style={{ color:"var(--muted)", fontSize:11, marginLeft:8 }}>at stake</span>
             </div>
           </div>
         ) : (
-          <div className="card" style={{ textAlign:"center", padding:"40px 20px" }}>
+          <div className="card" style={{ textAlign:"center", padding: isMobile ? "32px 16px" : "44px" }}>
             <MiniRing countdown={countdown} total={DUEL_INTERVAL}/>
-            <p style={{ marginTop:16, fontFamily:"'Oswald',sans-serif", fontSize:12, letterSpacing:4, color:"var(--muted)" }}>
+            <p style={{ marginTop:14, fontFamily:"'Oswald',sans-serif", fontSize:11, letterSpacing:4, color:"var(--muted)" }}>
               NEXT DUEL IN
             </p>
             <p style={{ marginTop:10, color:"var(--dim)", fontSize:13, lineHeight:1.7 }}>
-              Two players from the queue will be selected.{" "}
+              Join the queue to be eligible.{" "}
               <button onClick={() => navigate("queue")} style={{
                 background:"none", border:"none", cursor:"pointer",
                 color:"var(--gold)", fontFamily:"'Barlow',sans-serif",
                 fontSize:13, textDecoration:"underline",
-              }}>Join the queue</button> to be eligible.
+              }}>Join now →</button>
             </p>
           </div>
         )}
       </section>
 
-      {/* ── DUEL HISTORY ──────────────────────────────────────── */}
-      <section style={{ padding:"0 20px 72px", maxWidth:"var(--max-w)", margin:"0 auto" }}>
-        <div style={{ marginBottom:20 }}>
+      {/* ══════════════════════════════════════════════════════════
+          DUEL HISTORY
+      ══════════════════════════════════════════════════════════ */}
+      <section style={{ padding:pad, paddingBottom:64, maxWidth:"var(--max-w)", margin:"0 auto" }}>
+        <div style={{ marginBottom:18 }}>
           <div className="label" style={{ marginBottom:10, color:"var(--muted)" }}>ON-CHAIN RECORD</div>
           <h2 style={{
             fontFamily:"'Russo One',sans-serif",
-            fontSize:"clamp(22px,5vw,30px)", letterSpacing:"0.08em", color:"var(--text)",
+            fontSize: isMobile ? 22 : 30,
+            letterSpacing:"0.08em", color:"var(--text)",
           }}>RECENT DUELS</h2>
         </div>
 
         {duels.length === 0 ? (
-          <div className="card" style={{ textAlign:"center", padding:"48px 20px" }}>
-            <div style={{ fontSize:40, opacity:0.3, marginBottom:14 }}>⚔️</div>
+          <div className="card" style={{ textAlign:"center", padding:"44px 16px" }}>
+            <div style={{ fontSize:36, opacity:0.3, marginBottom:12 }}>⚔️</div>
             <div className="label" style={{ color:"var(--dim)" }}>FIRST DUEL COMING SOON</div>
           </div>
         ) : (
-          <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
+          <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
             {duels.map((d, i) => {
               const color = outcomeColor(d.outcome);
               const label = outcomeLabel(d);
@@ -451,67 +513,93 @@ export default function Home({ navigate }) {
                 <div key={d.id} style={{
                   background:"var(--card)",
                   border:`1px solid ${color}22`,
-                  borderRadius:14, padding:"16px 18px",
+                  borderRadius:12,
+                  padding: isMobile ? "14px 14px" : "18px 20px",
                   position:"relative", overflow:"hidden",
                   animation:`slide-up 0.5s ease ${i*0.05}s both`,
                 }}>
                   <div style={{
                     position:"absolute", top:0, left:0, right:0, height:3,
-                    background:`linear-gradient(90deg,${color},${color}66)`,
+                    background:`linear-gradient(90deg,${color},${color}55)`,
                   }}/>
+
+                  {/* Outcome label */}
                   <div style={{
                     fontFamily:"'Oswald',sans-serif",
-                    fontSize:11, fontWeight:600, color, letterSpacing:2, marginBottom:12,
+                    fontSize:10, fontWeight:600,
+                    color, letterSpacing:2, marginBottom:10,
                   }}>{label}</div>
 
-                  <div style={{ display:"flex", justifyContent:"space-between", gap:8, alignItems:"center" }}>
+                  {/* Players row */}
+                  <div style={{
+                    display:"flex",
+                    justifyContent:"space-between",
+                    alignItems:"center",
+                    gap: isMobile ? 6 : 12,
+                  }}>
                     {/* P1 */}
                     <div style={{ textAlign:"center", flex:1, minWidth:0 }}>
                       <div style={{
                         fontFamily:"'Oswald',sans-serif",
-                        fontSize:13, fontWeight:600, color:"var(--text)",
+                        fontSize: isMobile ? 12 : 14,
+                        fontWeight:600, color:"var(--text)",
                         overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap",
+                        marginBottom:6,
                       }}>
                         {d.player1Username || short(d.player1)}
                       </div>
                       <span style={{
-                        display:"inline-block", marginTop:6,
-                        padding:"4px 10px", borderRadius:20,
-                        fontFamily:"'Russo One',sans-serif", fontSize:10,
-                        background: d.vote1==="STEAL" ? "var(--redDim)" : "var(--goldDim)",
-                        color:      d.vote1==="STEAL" ? "var(--red2)"   : "var(--gold)",
+                        display:"inline-block",
+                        padding: isMobile ? "3px 8px" : "4px 10px",
+                        borderRadius:20,
+                        fontFamily:"'Russo One',sans-serif",
+                        fontSize: isMobile ? 9 : 10,
+                        background: d.vote1==="STEAL" ? "var(--redDim)"  : "var(--goldDim)",
+                        color:      d.vote1==="STEAL" ? "var(--red2)"    : "var(--gold)",
                         border:`1px solid ${d.vote1==="STEAL" ? "rgba(204,32,32,0.3)" : "var(--goldBorder)"}`,
+                        letterSpacing:1,
                       }}>{d.vote1||"—"}</span>
                     </div>
 
-                    {/* Center */}
+                    {/* Center: VS + amount */}
                     <div style={{ textAlign:"center", flexShrink:0 }}>
-                      <div style={{ fontFamily:"'Oswald',sans-serif", fontSize:9, color:"var(--dim)", letterSpacing:3 }}>VS</div>
-                      <div style={{ fontFamily:"'Russo One',sans-serif", fontSize:14, color:"var(--gold)", marginTop:4 }}>
-                        ◎ {fmtSOL(d.amount)}
-                      </div>
+                      <div style={{
+                        fontFamily:"'Oswald',sans-serif",
+                        fontSize:8, color:"var(--dim)", letterSpacing:3,
+                      }}>VS</div>
+                      <div style={{
+                        fontFamily:"'Russo One',sans-serif",
+                        fontSize: isMobile ? 12 : 14,
+                        color:"var(--gold)", marginTop:4,
+                      }}>◎ {fmtSOL(d.amount)}</div>
                     </div>
 
                     {/* P2 */}
                     <div style={{ textAlign:"center", flex:1, minWidth:0 }}>
                       <div style={{
                         fontFamily:"'Oswald',sans-serif",
-                        fontSize:13, fontWeight:600, color:"var(--text)",
+                        fontSize: isMobile ? 12 : 14,
+                        fontWeight:600, color:"var(--text)",
                         overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap",
+                        marginBottom:6,
                       }}>
                         {d.player2Username || short(d.player2)}
                       </div>
                       <span style={{
-                        display:"inline-block", marginTop:6,
-                        padding:"4px 10px", borderRadius:20,
-                        fontFamily:"'Russo One',sans-serif", fontSize:10,
-                        background: d.vote2==="STEAL" ? "var(--redDim)" : "var(--goldDim)",
-                        color:      d.vote2==="STEAL" ? "var(--red2)"   : "var(--gold)",
+                        display:"inline-block",
+                        padding: isMobile ? "3px 8px" : "4px 10px",
+                        borderRadius:20,
+                        fontFamily:"'Russo One',sans-serif",
+                        fontSize: isMobile ? 9 : 10,
+                        background: d.vote2==="STEAL" ? "var(--redDim)"  : "var(--goldDim)",
+                        color:      d.vote2==="STEAL" ? "var(--red2)"    : "var(--gold)",
                         border:`1px solid ${d.vote2==="STEAL" ? "rgba(204,32,32,0.3)" : "var(--goldBorder)"}`,
+                        letterSpacing:1,
                       }}>{d.vote2||"—"}</span>
                     </div>
                   </div>
 
+                  {/* Time */}
                   <div style={{
                     marginTop:10, textAlign:"right",
                     fontSize:10, color:"var(--dim)", fontFamily:"'Barlow',sans-serif",
@@ -524,15 +612,15 @@ export default function Home({ navigate }) {
 
         {/* Stats bar */}
         {totalRounds > 0 && (
-          <div className="card" style={{ marginTop:16, display:"flex", gap:24, flexWrap:"wrap" }}>
+          <div className="card" style={{ marginTop:14, display:"flex", gap:20, flexWrap:"wrap" }}>
             {[
-              { label:"BOTH SPLIT",  value:totalSplits,                          color:"var(--green)" },
-              { label:"BETRAYALS",   value:totalSteals,                          color:"var(--red2)"  },
-              { label:"BOTH STOLE",  value:totalRounds-totalSplits-totalSteals,  color:"var(--slate)" },
+              { label:"BOTH SPLIT",  value: totalSplits,                          color:"var(--green)" },
+              { label:"BETRAYALS",   value: totalSteals,                          color:"var(--red2)"  },
+              { label:"BOTH STOLE",  value: totalRounds - totalSplits - totalSteals, color:"var(--slate)" },
             ].map(s => (
               <div key={s.label}>
                 <div className="label" style={{ color:"var(--muted)", marginBottom:6, fontSize:8 }}>{s.label}</div>
-                <div style={{ fontFamily:"'Russo One',sans-serif", fontSize:22, color:s.color }}>
+                <div style={{ fontFamily:"'Russo One',sans-serif", fontSize:20, color:s.color }}>
                   {Math.max(0, s.value)}
                 </div>
               </div>
@@ -541,50 +629,54 @@ export default function Home({ navigate }) {
         )}
       </section>
 
-      {/* ── CA + LINKS ────────────────────────────────────────── */}
-      <section style={{ padding:"0 20px 72px", maxWidth:"var(--max-w)", margin:"0 auto" }}>
+      {/* ══════════════════════════════════════════════════════════
+          CA + LINKS
+      ══════════════════════════════════════════════════════════ */}
+      <section style={{ padding:pad, paddingBottom:72, maxWidth:"var(--max-w)", margin:"0 auto" }}>
         <div className="card" style={{ border:"1px solid rgba(255,184,0,0.18)" }}>
           <div className="label" style={{ marginBottom:12, color:"var(--muted)" }}>CONTRACT ADDRESS</div>
 
-          <div style={{ marginBottom:14 }}>
-            <div className="mono" style={{
-              wordBreak:"break-all", fontSize:12,
-              color: isLive ? "var(--text)" : "var(--dim)",
-              fontStyle: isLive ? "normal" : "italic",
-              lineHeight:1.6,
-            }}>
-              {isLive ? TOKEN_CA : "— contract address coming at launch —"}
-            </div>
-          </div>
+          {/* CA text — breaks cleanly on mobile */}
+          <div style={{
+            fontFamily:"'Share Tech Mono',monospace",
+            fontSize: isMobile ? 10 : 13,
+            color:"var(--text)",
+            wordBreak:"break-all",
+            lineHeight:1.7,
+            marginBottom:16,
+          }}>{TOKEN_CA}</div>
 
-          <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
-            {isLive && (
-              <button onClick={copyCA} className={`btn-outline${copiedCA?" copy-flash":""}`}
-                style={{ flex:1, minWidth:120 }}>
-                {copiedCA ? "COPIED ✓" : "COPY CA"}
-              </button>
-            )}
+          {/* Buttons */}
+          <div style={{
+            display:"flex",
+            flexDirection: isMobile ? "column" : "row",
+            gap:10,
+          }}>
+            <button onClick={copyCA} className={`btn-outline${copiedCA?" copy-flash":""}`}
+              style={{ flex: isMobile ? "none" : 1 }}>
+              {copiedCA ? "COPIED ✓" : "COPY CA"}
+            </button>
             <a href={X_URL} target="_blank" rel="noreferrer" style={{
-              flex:1, minWidth:100,
+              flex: isMobile ? "none" : 1,
               display:"flex", alignItems:"center", justifyContent:"center",
-              padding:"10px",
+              padding:"10px 16px",
               background:"rgba(255,255,255,0.04)",
               border:"1px solid rgba(255,255,255,0.08)",
               borderRadius:8,
               fontFamily:"'Oswald',sans-serif",
               fontSize:12, fontWeight:600, letterSpacing:2,
-              color:"var(--muted)", textAlign:"center",
+              color:"var(--muted)",
             }}>𝕏 TWITTER</a>
             <a href={COMMUNITY_URL} target="_blank" rel="noreferrer" style={{
-              flex:1, minWidth:100,
+              flex: isMobile ? "none" : 1,
               display:"flex", alignItems:"center", justifyContent:"center",
-              padding:"10px",
+              padding:"10px 16px",
               background:"rgba(255,255,255,0.04)",
               border:"1px solid rgba(255,255,255,0.08)",
               borderRadius:8,
               fontFamily:"'Oswald',sans-serif",
               fontSize:12, fontWeight:600, letterSpacing:2,
-              color:"var(--muted)", textAlign:"center",
+              color:"var(--muted)",
             }}>COMMUNITY</a>
           </div>
         </div>
