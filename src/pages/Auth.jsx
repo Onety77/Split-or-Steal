@@ -7,53 +7,57 @@ const TOKEN_CA   = "13SVgpzFcZf8vF6Tg1QV7vec82FdJrf4Kg2VEX4xpump";
 const ST_API_KEY = import.meta.env.VITE_TRACKER_CODE;
 const MIN_USD    = 10;
 
-// ─── Wallet verification ───────────────────────────────────────────────────
-// 1. Gets token price from SolanaTracker
-// 2. Gets wallet's token balance from Solana RPC
-// 3. Returns { eligible, usdValue, tokenAmount }
+// ─── WALLET VERIFICATION ───────────────────────────────────────────────────
+// Searches through SolanaTracker holders pages for the wallet
+// Returns { eligible, usdValue, tokenAmount, found }
 async function verifyWallet(walletAddress) {
-  // Step 1: get token price
-  let price = 0;
-  try {
-    const res  = await fetch(
-      `https://data.solanatracker.io/tokens/${TOKEN_CA}`,
-      { headers: { "x-api-key": ST_API_KEY } }
-    );
-    const data = await res.json();
-    price = data?.price?.usd ?? data?.price ?? data?.pools?.[0]?.price?.usd ?? 0;
-  } catch {}
+  const wallet = walletAddress.trim();
 
-  // Step 2: get wallet's token balance from Solana RPC
-  let tokenAmount = 0;
-  try {
-    const res  = await fetch("https://api.mainnet-beta.solana.com", {
-      method:  "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id:      1,
-        method:  "getTokenAccountsByOwner",
-        params:  [
-          walletAddress,
-          { mint: TOKEN_CA },
-          { encoding: "jsonParsed" },
-        ],
-      }),
-    });
-    const data = await res.json();
-    const accounts = data?.result?.value ?? [];
-    if (accounts.length > 0) {
-      tokenAmount = accounts[0]?.account?.data?.parsed?.info?.tokenAmount?.uiAmount ?? 0;
+  // Try up to 5 pages (500 holders max)
+  for (let page = 1; page <= 5; page++) {
+    let raw;
+    try {
+      const res = await fetch(
+        `https://data.solanatracker.io/tokens/${TOKEN_CA}/holders?page=${page}&limit=100`,
+        { headers: { "x-api-key": ST_API_KEY } }
+      );
+      raw = await res.json();
+    } catch {
+      break;
     }
-  } catch {}
 
-  const usdValue = tokenAmount * price;
-  return {
-    eligible:    usdValue >= MIN_USD,
-    usdValue,
-    tokenAmount,
-    price,
-  };
+    // Rate limited or error
+    if (raw?.error) break;
+
+    // Normalise the list — we've seen it come back as .accounts, .holders, or bare array
+    const list = raw?.accounts ?? raw?.holders ?? raw?.items
+               ?? (Array.isArray(raw) ? raw : null);
+
+    if (!list || list.length === 0) break;
+
+    // Search for this wallet in the list
+    const match = list.find(h => {
+      const addr = h.wallet ?? h.address ?? h.owner ?? h.pubkey ?? "";
+      return addr.toLowerCase() === wallet.toLowerCase();
+    });
+
+    if (match) {
+      const usdValue    = match.value?.usd ?? match.value?.quote ?? 0;
+      const tokenAmount = match.amount ?? 0;
+      return {
+        found:       true,
+        eligible:    usdValue >= MIN_USD,
+        usdValue,
+        tokenAmount,
+      };
+    }
+
+    // If page returned less than 100, no more pages
+    if (list.length < 100) break;
+  }
+
+  // Not found in any page — wallet doesn't hold this token
+  return { found: false, eligible: false, usdValue: 0, tokenAmount: 0 };
 }
 
 // ─── AUTH PAGE ─────────────────────────────────────────────────────────────
@@ -64,16 +68,15 @@ export default function Auth({ navigate }) {
   const [loading, setLoading]= useState(false);
   const [error,   setError]  = useState("");
 
-  // Sign in fields
-  const [siEmail, setSiEmail]= useState("");
-  const [siPass,  setSiPass] = useState("");
+  // Sign in — only username now
+  const [siUsername, setSiUsername] = useState("");
+  const [siPass,     setSiPass]     = useState("");
 
-  // Sign up fields
-  const [suUsername, setSuUsername]= useState("");
-  const [suEmail,    setSuEmail]   = useState("");
-  const [suPass,     setSuPass]    = useState("");
-  const [suPass2,    setSuPass2]   = useState("");
-  const [suWallet,   setSuWallet]  = useState("");
+  // Sign up — only username, password, wallet
+  const [suUsername, setSuUsername] = useState("");
+  const [suPass,     setSuPass]     = useState("");
+  const [suPass2,    setSuPass2]    = useState("");
+  const [suWallet,   setSuWallet]   = useState("");
 
   // Wallet verification state
   const [walletStatus, setWalletStatus] = useState("idle");
@@ -81,13 +84,11 @@ export default function Auth({ navigate }) {
   const [walletInfo,   setWalletInfo]   = useState(null);
   const debounceRef = useRef(null);
 
-  // Debounced wallet check — fires 800ms after user stops typing
+  // Debounced wallet check
   useEffect(() => {
     if (tab !== "signup") return;
-
     const addr = suWallet.trim();
 
-    // Reset if too short
     if (addr.length < 32) {
       setWalletStatus("idle");
       setWalletInfo(null);
@@ -96,13 +97,13 @@ export default function Auth({ navigate }) {
 
     setWalletStatus("checking");
     setWalletInfo(null);
-
     clearTimeout(debounceRef.current);
+
     debounceRef.current = setTimeout(async () => {
       try {
         const result = await verifyWallet(addr);
         setWalletInfo(result);
-        if (result.tokenAmount === 0) {
+        if (!result.found) {
           setWalletStatus("not_holding");
         } else if (!result.eligible) {
           setWalletStatus("insufficient");
@@ -112,48 +113,68 @@ export default function Auth({ navigate }) {
       } catch {
         setWalletStatus("error");
       }
-    }, 800);
+    }, 900);
 
     return () => clearTimeout(debounceRef.current);
   }, [suWallet, tab]);
 
-  // ── Sign in ─────────────────────────────────────────────────────────────
+  // ── Sign in (username → derive internal email) ──────────────────────────
   const handleSignIn = async (e) => {
     e.preventDefault();
     setError("");
     setLoading(true);
     try {
-      await signIn({ email: siEmail, password: siPass });
+      const email = `${siUsername.toLowerCase().trim()}@sos-game.app`;
+      await signIn({ email, password: siPass });
       navigate("queue");
     } catch (err) {
-      setError(err.message.replace("Firebase:", "").trim());
+      const msg = err.message || "";
+      if (msg.includes("user-not-found") || msg.includes("invalid-credential") || msg.includes("wrong-password")) {
+        setError("Username or password is incorrect.");
+      } else {
+        setError(msg.replace("Firebase:","").trim());
+      }
     } finally {
       setLoading(false);
     }
   };
 
-  // ── Sign up ─────────────────────────────────────────────────────────────
+  // ── Sign up (generate email internally) ─────────────────────────────────
   const handleSignUp = async (e) => {
     e.preventDefault();
     setError("");
 
-    if (suUsername.length < 3)          { setError("Username must be at least 3 characters"); return; }
-    if (suUsername.length > 20)         { setError("Username can't exceed 20 characters"); return; }
-    if (!/^[a-zA-Z0-9_]+$/.test(suUsername)) { setError("Username: letters, numbers and underscores only"); return; }
-    if (suPass !== suPass2)             { setError("Passwords don't match"); return; }
-    if (walletStatus !== "eligible")    { setError("Your wallet must hold $10+ worth of $SOS to sign up"); return; }
+    if (suUsername.length < 3)
+      { setError("Username must be at least 3 characters"); return; }
+    if (suUsername.length > 20)
+      { setError("Username can't exceed 20 characters"); return; }
+    if (!/^[a-zA-Z0-9_]+$/.test(suUsername))
+      { setError("Username: letters, numbers and underscores only"); return; }
+    if (suPass.length < 6)
+      { setError("Password must be at least 6 characters"); return; }
+    if (suPass !== suPass2)
+      { setError("Passwords don't match"); return; }
+    if (walletStatus !== "eligible")
+      { setError("Your wallet must hold $10+ worth of $SOS to sign up"); return; }
 
     setLoading(true);
     try {
+      // Generate internal email from username — user never sees this
+      const email = `${suUsername.toLowerCase().trim()}@sos-game.app`;
       await signUp({
-        username: suUsername,
-        email:    suEmail,
+        username: suUsername.trim(),
+        email,
         password: suPass,
         wallet:   suWallet.trim(),
       });
       navigate("queue");
     } catch (err) {
-      setError(err.message.replace("Firebase:", "").trim());
+      const msg = err.message || "";
+      if (msg.includes("email-already-in-use") || msg.includes("Username already taken")) {
+        setError("That username is already taken. Pick a different one.");
+      } else {
+        setError(msg.replace("Firebase:","").trim());
+      }
     } finally {
       setLoading(false);
     }
@@ -163,36 +184,32 @@ export default function Auth({ navigate }) {
   const walletStatusUI = () => {
     if (walletStatus === "idle") return null;
 
-    const styles = {
-      checking:     { bg: "rgba(255,184,0,0.06)",  border: "rgba(255,184,0,0.2)",  color: "var(--muted)" },
-      eligible:     { bg: "rgba(0,200,83,0.08)",   border: "rgba(0,200,83,0.3)",   color: "var(--green)" },
-      insufficient: { bg: "rgba(204,32,32,0.08)",  border: "rgba(204,32,32,0.3)",  color: "var(--red2)"  },
-      not_holding:  { bg: "rgba(204,32,32,0.08)",  border: "rgba(204,32,32,0.3)",  color: "var(--red2)"  },
-      error:        { bg: "rgba(255,184,0,0.06)",  border: "rgba(255,184,0,0.2)",  color: "var(--muted)" },
+    const cfg = {
+      checking:     { bg:"rgba(255,184,0,0.06)",  border:"rgba(255,184,0,0.2)",  color:"var(--muted)" },
+      eligible:     { bg:"rgba(0,200,83,0.08)",   border:"rgba(0,200,83,0.3)",   color:"var(--green)" },
+      insufficient: { bg:"rgba(204,32,32,0.08)",  border:"rgba(204,32,32,0.3)",  color:"var(--red2)"  },
+      not_holding:  { bg:"rgba(204,32,32,0.08)",  border:"rgba(204,32,32,0.3)",  color:"var(--red2)"  },
+      error:        { bg:"rgba(255,184,0,0.06)",  border:"rgba(255,184,0,0.2)",  color:"var(--muted)" },
     };
-
-    const s = styles[walletStatus] || styles.idle;
-
-    const messages = {
+    const s   = cfg[walletStatus] || cfg.checking;
+    const msg = {
       checking:     "Checking your wallet...",
       eligible:     `✓ Eligible — holding $${walletInfo?.usdValue?.toFixed(2)} worth of $SOS`,
-      insufficient: `✗ Not enough — you hold $${walletInfo?.usdValue?.toFixed(2)} but need $${MIN_USD}+`,
-      not_holding:  `✗ This wallet doesn't hold any $SOS`,
-      error:        "Couldn't verify wallet — check the address and try again",
+      insufficient: `✗ Not enough — you hold $${walletInfo?.usdValue?.toFixed(2)}, need $${MIN_USD}+`,
+      not_holding:  "✗ This wallet doesn't hold any $SOS",
+      error:        "Couldn't verify — check the address and try again",
     };
 
     return (
       <div style={{
         marginTop:8, padding:"10px 14px",
-        background: s.bg,
-        border:     `1px solid ${s.border}`,
-        borderRadius:8,
+        background:s.bg, border:`1px solid ${s.border}`, borderRadius:8,
         display:"flex", alignItems:"center", gap:10,
       }}>
         {walletStatus === "checking" && (
           <div style={{
             width:12, height:12, borderRadius:"50%",
-            border:"2px solid rgba(255,184,0,0.3)",
+            border:"2px solid rgba(255,184,0,0.25)",
             borderTopColor:"var(--gold)",
             animation:"led-breathe 0.7s linear infinite",
             flexShrink:0,
@@ -200,15 +217,22 @@ export default function Auth({ navigate }) {
         )}
         <p style={{
           fontFamily:"'Barlow',sans-serif",
-          fontSize:12, color: s.color, lineHeight:1.5,
-        }}>
-          {messages[walletStatus]}
-        </p>
+          fontSize:12, color:s.color, lineHeight:1.5, margin:0,
+        }}>{msg[walletStatus]}</p>
       </div>
     );
   };
 
-  const canSubmitSignUp = walletStatus === "eligible" && !loading;
+  const canSubmit = walletStatus === "eligible" && !loading;
+
+  // ── Label style ─────────────────────────────────────────────────────────
+  const labelStyle = {
+    display:"block", fontSize:11, letterSpacing:3,
+    color:"var(--muted)", fontFamily:"'Oswald',sans-serif", marginBottom:7,
+  };
+  const hintStyle = {
+    marginTop:5, fontSize:11, color:"var(--dim)", fontFamily:"'Barlow',sans-serif",
+  };
 
   return (
     <div className="page" style={{
@@ -218,40 +242,36 @@ export default function Auth({ navigate }) {
       padding:"100px 24px 60px",
     }}>
 
-      {/* Background spotlight */}
+      {/* Spotlight */}
       <div style={{
         position:"fixed", inset:0, pointerEvents:"none", zIndex:0,
         background:"radial-gradient(ellipse at 50% 0%, rgba(255,184,0,0.12) 0%, transparent 60%)",
       }}/>
 
-      {/* Card */}
       <div style={{
         position:"relative", zIndex:2,
-        width:"100%", maxWidth:480,
+        width:"100%", maxWidth:460,
         animation:"slide-up 0.6s ease both",
       }}>
 
-        {/* Orb header */}
+        {/* Header */}
         <div style={{ textAlign:"center", marginBottom:32 }}>
-          <div style={{ display:"flex", justifyContent:"center", gap:32, marginBottom:20 }}>
-            <Orb type="SPLIT" size={80} animated={false}/>
-            <Orb type="STEAL" size={80} animated={false}/>
+          <div style={{ display:"flex", justifyContent:"center", gap:28, marginBottom:20 }}>
+            <Orb type="SPLIT" size={76} animated={false}/>
+            <Orb type="STEAL" size={76} animated={false}/>
           </div>
           <h1 style={{
             fontFamily:"'Russo One',sans-serif",
-            fontSize:28, letterSpacing:"0.1em",
+            fontSize:26, letterSpacing:"0.1em",
             background:"linear-gradient(135deg,#FFE566,#FFB800)",
             WebkitBackgroundClip:"text", WebkitTextFillColor:"transparent",
           }}>
             {tab === "signin" ? "WELCOME BACK" : "JOIN THE GAME"}
           </h1>
-          <p style={{
-            marginTop:8, fontFamily:"'Barlow',sans-serif",
-            fontSize:14, color:"var(--muted)",
-          }}>
+          <p style={{ marginTop:8, fontFamily:"'Barlow',sans-serif", fontSize:14, color:"var(--muted)" }}>
             {tab === "signin"
-              ? "Sign in to your account and join the queue."
-              : "Create your account. Hold $SOS to qualify for duels."}
+              ? "Sign in and join the queue."
+              : "Create your account. Hold $SOS to qualify."}
           </p>
         </div>
 
@@ -263,21 +283,22 @@ export default function Auth({ navigate }) {
           borderRadius:10, padding:4, marginBottom:28,
         }}>
           {[["signin","SIGN IN"],["signup","SIGN UP"]].map(([key, label]) => (
-            <button key={key} onClick={() => { setTab(key); setError(""); }} style={{
-              flex:1,
-              background: tab===key ? "rgba(255,184,0,0.12)" : "none",
-              border:     tab===key ? "1px solid rgba(255,184,0,0.25)" : "1px solid transparent",
-              borderRadius:8,
-              color:      tab===key ? "var(--gold)" : "var(--muted)",
-              cursor:"pointer",
-              fontFamily:"'Oswald',sans-serif",
-              fontSize:13, fontWeight:600, letterSpacing:2,
-              padding:"10px", transition:"all 0.2s",
-            }}>{label}</button>
+            <button key={key}
+              onClick={() => { setTab(key); setError(""); }}
+              style={{
+                flex:1,
+                background: tab===key ? "rgba(255,184,0,0.12)" : "none",
+                border:     tab===key ? "1px solid rgba(255,184,0,0.25)" : "1px solid transparent",
+                borderRadius:8, cursor:"pointer",
+                fontFamily:"'Oswald',sans-serif",
+                fontSize:13, fontWeight:600, letterSpacing:2,
+                color: tab===key ? "var(--gold)" : "var(--muted)",
+                padding:"10px", transition:"all 0.2s",
+              }}>{label}</button>
           ))}
         </div>
 
-        {/* Error banner */}
+        {/* Error */}
         {error && (
           <div style={{
             marginBottom:16, padding:"12px 16px",
@@ -285,111 +306,91 @@ export default function Auth({ navigate }) {
             border:"1px solid rgba(204,32,32,0.25)",
             borderRadius:8,
           }}>
-            <p className="error-text">{error}</p>
+            <p className="error-text" style={{ margin:0 }}>{error}</p>
           </div>
         )}
 
-        {/* ── SIGN IN ── */}
+        {/* ── SIGN IN ─────────────────────────────────────────────── */}
         {tab === "signin" && (
-          <form onSubmit={handleSignIn} style={{ display:"flex", flexDirection:"column", gap:14 }}>
+          <form onSubmit={handleSignIn}
+            style={{ display:"flex", flexDirection:"column", gap:16 }}>
+
             <div>
-              <label style={{
-                display:"block", fontSize:11, letterSpacing:3,
-                color:"var(--muted)", fontFamily:"'Oswald',sans-serif", marginBottom:7,
-              }}>EMAIL</label>
-              <input type="email" className="input-field"
-                placeholder="your@email.com"
-                value={siEmail} onChange={e => setSiEmail(e.target.value)}
-                required autoComplete="email"/>
+              <label style={labelStyle}>USERNAME</label>
+              <input type="text" className="input-field"
+                placeholder="your_username"
+                value={siUsername}
+                onChange={e => setSiUsername(e.target.value)}
+                required autoComplete="username"/>
             </div>
+
             <div>
-              <label style={{
-                display:"block", fontSize:11, letterSpacing:3,
-                color:"var(--muted)", fontFamily:"'Oswald',sans-serif", marginBottom:7,
-              }}>PASSWORD</label>
+              <label style={labelStyle}>PASSWORD</label>
               <input type="password" className="input-field"
                 placeholder="••••••••"
-                value={siPass} onChange={e => setSiPass(e.target.value)}
+                value={siPass}
+                onChange={e => setSiPass(e.target.value)}
                 required autoComplete="current-password"/>
             </div>
+
             <button type="submit" className="btn-gold" disabled={loading}
-              style={{ marginTop:8, fontSize:15, padding:"15px" }}>
+              style={{ marginTop:6, fontSize:15, padding:"15px" }}>
               {loading ? "SIGNING IN..." : "SIGN IN →"}
             </button>
           </form>
         )}
 
-        {/* ── SIGN UP ── */}
+        {/* ── SIGN UP ─────────────────────────────────────────────── */}
         {tab === "signup" && (
-          <form onSubmit={handleSignUp} style={{ display:"flex", flexDirection:"column", gap:14 }}>
+          <form onSubmit={handleSignUp}
+            style={{ display:"flex", flexDirection:"column", gap:14 }}>
 
             {/* Username */}
             <div>
-              <label style={{
-                display:"block", fontSize:11, letterSpacing:3,
-                color:"var(--muted)", fontFamily:"'Oswald',sans-serif", marginBottom:7,
-              }}>USERNAME</label>
+              <label style={labelStyle}>USERNAME</label>
               <input type="text" className="input-field"
                 placeholder="your_username"
-                value={suUsername} onChange={e => setSuUsername(e.target.value)}
-                required minLength={3} maxLength={20} autoComplete="username"/>
-              <p style={{ marginTop:5, fontSize:11, color:"var(--dim)", fontFamily:"'Barlow',sans-serif" }}>
+                value={suUsername}
+                onChange={e => setSuUsername(e.target.value)}
+                required minLength={3} maxLength={20}
+                autoComplete="username"/>
+              <p style={hintStyle}>
                 Letters, numbers, underscores. Your public identity in every duel.
               </p>
             </div>
 
-            {/* Email */}
-            <div>
-              <label style={{
-                display:"block", fontSize:11, letterSpacing:3,
-                color:"var(--muted)", fontFamily:"'Oswald',sans-serif", marginBottom:7,
-              }}>EMAIL</label>
-              <input type="email" className="input-field"
-                placeholder="your@email.com"
-                value={suEmail} onChange={e => setSuEmail(e.target.value)}
-                required autoComplete="email"/>
-            </div>
-
             {/* Password */}
             <div>
-              <label style={{
-                display:"block", fontSize:11, letterSpacing:3,
-                color:"var(--muted)", fontFamily:"'Oswald',sans-serif", marginBottom:7,
-              }}>PASSWORD</label>
+              <label style={labelStyle}>PASSWORD</label>
               <input type="password" className="input-field"
                 placeholder="••••••••"
-                value={suPass} onChange={e => setSuPass(e.target.value)}
-                required minLength={6} autoComplete="new-password"/>
+                value={suPass}
+                onChange={e => setSuPass(e.target.value)}
+                required minLength={6}
+                autoComplete="new-password"/>
             </div>
 
             {/* Confirm password */}
             <div>
-              <label style={{
-                display:"block", fontSize:11, letterSpacing:3,
-                color:"var(--muted)", fontFamily:"'Oswald',sans-serif", marginBottom:7,
-              }}>CONFIRM PASSWORD</label>
+              <label style={labelStyle}>CONFIRM PASSWORD</label>
               <input type="password" className="input-field"
                 placeholder="••••••••"
-                value={suPass2} onChange={e => setSuPass2(e.target.value)}
+                value={suPass2}
+                onChange={e => setSuPass2(e.target.value)}
                 required autoComplete="new-password"/>
             </div>
 
-            {/* Wallet — with live verification */}
+            {/* Wallet */}
             <div>
-              <label style={{
-                display:"block", fontSize:11, letterSpacing:3,
-                color:"var(--muted)", fontFamily:"'Oswald',sans-serif", marginBottom:7,
-              }}>
+              <label style={labelStyle}>
                 SOLANA WALLET ADDRESS
                 {walletStatus === "eligible" && (
-                  <span style={{ marginLeft:8, color:"var(--green)", fontSize:10, letterSpacing:1 }}>
+                  <span style={{ marginLeft:8, color:"var(--green)", fontSize:10 }}>
                     ● VERIFIED
                   </span>
                 )}
               </label>
-              <input
-                type="text"
-                className="input-field"
+              <input type="text" className="input-field"
                 placeholder="Paste your Solana wallet address"
                 value={suWallet}
                 onChange={e => setSuWallet(e.target.value)}
@@ -397,50 +398,43 @@ export default function Auth({ navigate }) {
                 style={{
                   fontFamily:"'Share Tech Mono',monospace",
                   fontSize:12,
-                  borderColor: walletStatus === "eligible"
-                    ? "rgba(0,200,83,0.4)"
-                    : walletStatus === "not_holding" || walletStatus === "insufficient"
-                    ? "rgba(204,32,32,0.4)"
-                    : undefined,
-                  boxShadow: walletStatus === "eligible"
-                    ? "0 0 0 3px rgba(0,200,83,0.06)"
-                    : walletStatus === "not_holding" || walletStatus === "insufficient"
-                    ? "0 0 0 3px rgba(204,32,32,0.06)"
-                    : undefined,
-                }}
-              />
+                  borderColor:
+                    walletStatus === "eligible"    ? "rgba(0,200,83,0.4)"
+                  : walletStatus === "insufficient" || walletStatus === "not_holding"
+                                                   ? "rgba(204,32,32,0.4)"
+                  : undefined,
+                  boxShadow:
+                    walletStatus === "eligible"    ? "0 0 0 3px rgba(0,200,83,0.06)"
+                  : walletStatus === "insufficient" || walletStatus === "not_holding"
+                                                   ? "0 0 0 3px rgba(204,32,32,0.06)"
+                  : undefined,
+                }}/>
 
-              {/* Verification status */}
               {walletStatusUI()}
 
               {walletStatus === "idle" && (
-                <p style={{ marginTop:6, fontSize:11, color:"var(--dim)", fontFamily:"'Barlow',sans-serif" }}>
+                <p style={hintStyle}>
                   Must hold $10+ worth of $SOS. Verified automatically when you paste your address.
                 </p>
               )}
-
-              {/* Where to buy hint if not holding */}
               {(walletStatus === "not_holding" || walletStatus === "insufficient") && (
-                <p style={{ marginTop:8, fontSize:11, color:"var(--dim)", fontFamily:"'Barlow',sans-serif" }}>
-                  Buy $SOS on pump.fun to qualify. Come back once you're holding.
+                <p style={{ ...hintStyle, marginTop:8 }}>
+                  Buy $SOS on pump.fun and come back once you're holding $10+.
                 </p>
               )}
             </div>
 
             {/* Submit */}
-            <button
-              type="submit"
-              className="btn-gold"
-              disabled={!canSubmitSignUp}
+            <button type="submit" className="btn-gold"
+              disabled={!canSubmit}
               style={{
-                marginTop:8, fontSize:15, padding:"15px",
-                opacity: canSubmitSignUp ? 1 : 0.45,
-                cursor:  canSubmitSignUp ? "pointer" : "not-allowed",
-              }}
-            >
-              {loading             ? "CREATING ACCOUNT..." :
-               walletStatus === "checking"  ? "VERIFYING WALLET..."  :
-               walletStatus === "eligible"  ? "CREATE ACCOUNT →"     :
+                marginTop:6, fontSize:15, padding:"15px",
+                opacity: canSubmit ? 1 : 0.45,
+                cursor:  canSubmit ? "pointer" : "not-allowed",
+              }}>
+              {loading              ? "CREATING ACCOUNT..."    :
+               walletStatus === "checking" ? "VERIFYING WALLET..."   :
+               walletStatus === "eligible" ? "CREATE ACCOUNT →"      :
                "VERIFY WALLET TO CONTINUE"}
             </button>
 
@@ -457,10 +451,10 @@ export default function Auth({ navigate }) {
             onClick={() => { setTab(tab==="signin"?"signup":"signin"); setError(""); }}
             style={{
               background:"none", border:"none", cursor:"pointer",
-              color:"var(--gold)", fontSize:13, fontFamily:"'Barlow',sans-serif",
+              color:"var(--gold)", fontSize:13,
+              fontFamily:"'Barlow',sans-serif",
               textDecoration:"underline",
-            }}
-          >
+            }}>
             {tab === "signin" ? "Sign up" : "Sign in"}
           </button>
         </p>
