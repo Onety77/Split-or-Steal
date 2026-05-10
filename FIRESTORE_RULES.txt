@@ -1,0 +1,92 @@
+// Firebase Console → Firestore → Rules → Paste this → Publish
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Usernames (for uniqueness checks) ──────────────────────────────────
+    match /sos_usernames/{username} {
+      allow read:   if true;
+      allow create: if request.auth != null
+        && request.resource.data.uid == request.auth.uid;
+      allow update, delete: if false;
+    }
+
+    // ── User profiles ──────────────────────────────────────────────────────
+    match /sos_users/{uid} {
+      allow read: if true;
+      allow create: if request.auth != null && request.auth.uid == uid;
+      allow update: if request.auth != null && request.auth.uid == uid;
+      allow delete: if false;
+    }
+
+    // ── Queue ──────────────────────────────────────────────────────────────
+    match /sos_queue/{uid} {
+      // Anyone can read the queue (it's the public waiting room)
+      allow read: if true;
+
+      // Only the owner can create their own entry
+      allow create: if request.auth != null
+        && request.auth.uid == uid
+        && request.resource.data.status == 'waiting'
+        && request.resource.data.uid == uid;
+
+      // Owner can delete (leave queue) — only if waiting
+      allow delete: if request.auth != null
+        && request.auth.uid == uid;
+
+      // Owner can update status from ready_check → ready
+      // (clicking the READY button)
+      allow update: if request.auth != null
+        && request.auth.uid == uid
+        && resource.data.status == 'ready_check'
+        && request.resource.data.status == 'ready'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']);
+    }
+
+    // ── Duels (public read, engine writes) ─────────────────────────────────
+    match /sos_duels/{duelId} {
+      allow read: if true;
+      allow write: if false; // Admin SDK only
+    }
+
+    // ── Duel chat (only the two players can read/write) ────────────────────
+    match /sos_duels/{duelId}/chat/{messageId} {
+      allow read: if request.auth != null && (
+        request.auth.uid == get(/databases/$(database)/documents/sos_duels/$(duelId)).data.player1Uid ||
+        request.auth.uid == get(/databases/$(database)/documents/sos_duels/$(duelId)).data.player2Uid
+      );
+      allow create: if request.auth != null && (
+        request.auth.uid == get(/databases/$(database)/documents/sos_duels/$(duelId)).data.player1Uid ||
+        request.auth.uid == get(/databases/$(database)/documents/sos_duels/$(duelId)).data.player2Uid
+      )
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.text is string
+        && request.resource.data.text.size() >= 1
+        && request.resource.data.text.size() <= 200;
+      allow update, delete: if false;
+    }
+
+    // ── Private votes (each player writes their own, NOBODY else can read) ─
+    // Only the Admin SDK (engine) can read these — not other users
+    match /sos_private_votes/{uid} {
+      allow read:  if false;  // Admin SDK bypasses this — nobody else reads votes
+      allow write: if request.auth != null
+        && request.auth.uid == uid
+        && request.resource.data.uid == uid
+        && request.resource.data.vote in ['SPLIT', 'STEAL']
+        && request.resource.data.duelId is string;
+    }
+
+    // ── Global stats (public read, engine writes) ──────────────────────────
+    match /sos_stats/{doc} {
+      allow read:  if true;
+      allow write: if false; // Admin SDK only
+    }
+
+    // ── Deny everything else ───────────────────────────────────────────────
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
