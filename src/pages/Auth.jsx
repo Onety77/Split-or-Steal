@@ -3,7 +3,7 @@ import { useAuth } from "../context/AuthContext";
 import Orb from "../components/Orb";
 
 // ─── CONFIG ────────────────────────────────────────────────────────────────
-const TOKEN_CA   = "VuAy6VubBezBYzMurxDfJe6xcBWnaRhCcjzjGCqpump";
+const TOKEN_CA   = "13SVgpzFcZf8vF6Tg1QV7vec82FdJrf4Kg2VEX4xpump";
 const ST_API_KEY = import.meta.env.VITE_TRACKER_CODE;
 const MIN_USD    = 10;
 
