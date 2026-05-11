@@ -1,7 +1,5 @@
 require("dotenv").config();
 
-const fetch = require("node-fetch");
-
 const {
   Connection, PublicKey, Transaction,
   SystemProgram, Keypair, sendAndConfirmTransaction, LAMPORTS_PER_SOL,
@@ -14,14 +12,13 @@ const { getFirestore, FieldValue, Timestamp } = require("firebase-admin/firestor
 // ── CONFIG ──────────────────────────────────────────────────────────────────
 const CREATOR_WALLET  = process.env.CREATOR_WALLET;
 const TOKEN_CA        = process.env.TOKEN_CA;
-const ST_API_KEY      = process.env.SOLANATRACKER_API_KEY;
 const SOLANA_RPC      = process.env.SOLANA_RPC || "https://api.mainnet-beta.solana.com";
 const GAS_RESERVE_SOL = parseFloat(process.env.GAS_RESERVE_SOL || "0.002");
 
-const READY_CHECK_MS = 90 * 1000;
-const CHAT_MS        =  3 * 60 * 1000;
-const VOTE_MS        =  2 * 60 * 1000;
-const CYCLE_MS       = 10 * 60 * 1000;
+const READY_WINDOW_MS = 90 * 1000;   // max time to wait for both to click ready
+const CHAT_MS         =  3 * 60 * 1000;  // fixed 3min chat phase
+const VOTE_MAX_MS     =  2 * 60 * 1000;  // max 2min vote — ends early if both vote
+const CYCLE_MS        = 10 * 60 * 1000;  // base 10min cycle
 
 // ── STARTUP CHECKS ──────────────────────────────────────────────────────────
 const missing = ["CREATOR_PRIVATE_KEY","FIREBASE_SERVICE_ACCOUNT_JSON","CREATOR_WALLET","TOKEN_CA"]
@@ -50,12 +47,10 @@ let roundCounter = 0;
 let cycleEndTime = Date.now() + CYCLE_MS;
 let nextTimer    = null;
 
-// Retry wrapper for flaky network calls
 async function withRetry(fn, retries, label) {
   for (var i = 0; i <= retries; i++) {
-    try {
-      return await fn();
-    } catch (e) {
+    try { return await fn(); }
+    catch (e) {
       if (i === retries) throw e;
       log("  Retry " + (i+1) + "/" + retries + " for " + label + ": " + e.message);
       await sleep(1500 * (i + 1));
@@ -64,25 +59,16 @@ async function withRetry(fn, retries, label) {
 }
 
 async function getBalanceLamports() {
-  return withRetry(
-    () => connection.getBalance(new PublicKey(CREATOR_WALLET)),
-    3,
-    "getBalance"
-  );
+  return withRetry(() => connection.getBalance(new PublicKey(CREATOR_WALLET)), 3, "getBalance");
 }
 
 async function sendSOL(to, lamports) {
   const tx = new Transaction().add(
-    SystemProgram.transfer({
-      fromPubkey: creatorKP.publicKey,
-      toPubkey:   new PublicKey(to),
-      lamports,
-    })
+    SystemProgram.transfer({ fromPubkey: creatorKP.publicKey, toPubkey: new PublicKey(to), lamports })
   );
   return withRetry(
     () => sendAndConfirmTransaction(connection, tx, [creatorKP], { commitment: "confirmed" }),
-    2,
-    "sendSOL"
+    2, "sendSOL"
   );
 }
 
@@ -95,32 +81,131 @@ async function getWaitingPlayers(n) {
   return snap.docs.map(d => ({ id: d.id, ...d.data() }));
 }
 
-// Use set+merge instead of update — never fails due to missing doc
 async function setPlayerStatus(uid, status, extra) {
   try {
-    await db.doc("sos_queue/" + uid).set(
-      Object.assign({ status: status }, extra || {}),
-      { merge: true }
-    );
-    log("  setPlayerStatus OK: " + uid + " → " + status);
+    await db.doc("sos_queue/" + uid).set(Object.assign({ status: status }, extra || {}), { merge: true });
+    log("  " + uid.slice(0,8) + "... → " + status);
   } catch (e) {
-    log("  setPlayerStatus FAILED for " + uid + ": " + e.message);
+    log("  setPlayerStatus FAILED " + uid + ": " + e.message);
   }
 }
 
 async function ejectPlayer(uid) {
-  log("  Ejecting " + uid);
-  try { await db.doc("sos_queue/" + uid).delete(); } catch (e) {
-    log("  Eject failed for " + uid + ": " + e.message);
-  }
+  log("  Ejecting " + uid.slice(0,8) + "...");
+  try { await db.doc("sos_queue/" + uid).delete(); } catch {}
 }
 
 async function updateGlobal(fields) {
-  try {
-    await db.doc("sos_stats/global").set(fields, { merge: true });
-  } catch (e) {
-    log("  updateGlobal failed: " + e.message);
-  }
+  try { await db.doc("sos_stats/global").set(fields, { merge: true }); }
+  catch (e) { log("  updateGlobal failed: " + e.message); }
+}
+
+function scheduleNext(ms) {
+  if (nextTimer) clearTimeout(nextTimer);
+  var safeMs = Math.max(ms, 5000);
+  var nextAt  = Date.now() + safeMs;
+  updateGlobal({ nextDuelAt: Timestamp.fromMillis(nextAt) });
+  nextTimer = setTimeout(runRound, safeMs);
+  log("  Next round in " + Math.round(safeMs / 1000) + "s");
+}
+
+// ── REACT TO READY — fires the moment both players click ready ───────────────
+// Uses Firestore onSnapshot so the engine reacts instantly, not after 90s sleep
+function waitForBothReady(p1uid, p2uid) {
+  return new Promise(function(resolve) {
+    var p1Ready  = false;
+    var p2Ready  = false;
+    var resolved = false;
+    var unsubP1, unsubP2;
+
+    function done(result) {
+      if (resolved) return;
+      resolved = true;
+      clearTimeout(timeoutId);
+      if (unsubP1) unsubP1();
+      if (unsubP2) unsubP2();
+      resolve(result);
+    }
+
+    function check() {
+      if (p1Ready && p2Ready) {
+        log("  Both clicked READY — proceeding immediately!");
+        done({ p1Ready: true, p2Ready: true });
+      }
+    }
+
+    // Timeout: if 90s pass and not both ready, resolve with what we have
+    var timeoutId = setTimeout(function() {
+      log("  Ready window closed. P1: " + p1Ready + " P2: " + p2Ready);
+      done({ p1Ready: p1Ready, p2Ready: p2Ready });
+    }, READY_WINDOW_MS + 2000);
+
+    unsubP1 = db.doc("sos_queue/" + p1uid).onSnapshot(function(snap) {
+      if (!snap.exists()) return;
+      if (snap.data().status === "ready") {
+        log("  P1 clicked READY");
+        p1Ready = true;
+        check();
+      }
+    });
+
+    unsubP2 = db.doc("sos_queue/" + p2uid).onSnapshot(function(snap) {
+      if (!snap.exists()) return;
+      if (snap.data().status === "ready") {
+        log("  P2 clicked READY");
+        p2Ready = true;
+        check();
+      }
+    });
+  });
+}
+
+// ── REACT TO VOTES — ends vote phase the moment both players vote ────────────
+function waitForBothVotes(p1uid, p2uid, duelId) {
+  return new Promise(function(resolve) {
+    var vote1    = null;
+    var vote2    = null;
+    var resolved = false;
+    var unsubV1, unsubV2;
+
+    function done() {
+      if (resolved) return;
+      resolved = true;
+      clearTimeout(timeoutId);
+      if (unsubV1) unsubV1();
+      if (unsubV2) unsubV2();
+      resolve({ vote1: vote1 || "SPLIT", vote2: vote2 || "SPLIT" });
+    }
+
+    function check() {
+      if (vote1 && vote2) {
+        log("  Both voted! Ending vote phase early.");
+        done();
+      }
+    }
+
+    // Max 2 minutes — then reveal with whatever votes exist
+    var timeoutId = setTimeout(function() {
+      log("  Vote window closed. Votes — P1: " + (vote1||"none") + " P2: " + (vote2||"none"));
+      done();
+    }, VOTE_MAX_MS);
+
+    unsubV1 = db.doc("sos_private_votes/" + p1uid).onSnapshot(function(snap) {
+      if (snap.exists() && snap.data().duelId === duelId && snap.data().vote) {
+        vote1 = snap.data().vote;
+        log("  P1 voted: " + vote1);
+        check();
+      }
+    });
+
+    unsubV2 = db.doc("sos_private_votes/" + p2uid).onSnapshot(function(snap) {
+      if (snap.exists() && snap.data().duelId === duelId && snap.data().vote) {
+        vote2 = snap.data().vote;
+        log("  P2 voted: " + vote2);
+        check();
+      }
+    });
+  });
 }
 
 function resolveOutcome(v1, v2) {
@@ -130,54 +215,6 @@ function resolveOutcome(v1, v2) {
   return "P2_STEAL";
 }
 
-function scheduleNext(ms) {
-  if (nextTimer) clearTimeout(nextTimer);
-  var safeMs = Math.max(ms, 10000); // at least 10s
-  var nextAt  = Date.now() + safeMs;
-  updateGlobal({ nextDuelAt: Timestamp.fromMillis(nextAt) });
-  nextTimer = setTimeout(runRound, safeMs);
-  log("Next round scheduled in " + Math.round(safeMs / 1000) + "s");
-}
-
-// ── READY CHECK ─────────────────────────────────────────────────────────────
-async function readyCheck(p1, p2) {
-  var deadline   = Date.now() + READY_CHECK_MS;
-  var deadlineTs = Timestamp.fromMillis(deadline);
-
-  log("Ready check: " + p1.username + " vs " + p2.username + " (90s)");
-
-  await Promise.all([
-    setPlayerStatus(p1.uid, "ready_check", { readyCheckEndsAt: deadlineTs }),
-    setPlayerStatus(p2.uid, "ready_check", { readyCheckEndsAt: deadlineTs }),
-  ]);
-
-  // Wait the full window
-  await sleep(READY_CHECK_MS + 3000);
-
-  var s1, s2;
-  try {
-    var results = await Promise.all([
-      db.doc("sos_queue/" + p1.uid).get(),
-      db.doc("sos_queue/" + p2.uid).get(),
-    ]);
-    s1 = results[0];
-    s2 = results[1];
-  } catch (e) {
-    log("  Error reading queue after ready check: " + e.message);
-    return { p1Ready: false, p2Ready: false };
-  }
-
-  var p1Ready = s1.exists() && s1.data().status === "ready";
-  var p2Ready = s2.exists() && s2.data().status === "ready";
-
-  log("  P1 ready: " + p1Ready + " | P2 ready: " + p2Ready);
-
-  if (!p1Ready) { await ejectPlayer(p1.uid); cycleEndTime += READY_CHECK_MS; }
-  if (!p2Ready) { await ejectPlayer(p2.uid); cycleEndTime += READY_CHECK_MS; }
-
-  return { p1Ready: p1Ready, p2Ready: p2Ready };
-}
-
 // ── MAIN ROUND ───────────────────────────────────────────────────────────────
 async function runRound() {
   if (isRunning) { log("Already running, skipping."); return; }
@@ -185,53 +222,65 @@ async function runRound() {
   var thisRound = ++roundCounter;
   var p1 = null;
   var p2 = null;
-  log("\n=== Round " + thisRound + " starting ===");
+  log("\n=== Round " + thisRound + " ===");
 
   try {
-    // 1. Check pot balance
-    log("Checking wallet balance...");
+    // 1. Check pot
     var balLam = await getBalanceLamports();
     var balSOL = balLam / LAMPORTS_PER_SOL;
     var gasLam = Math.ceil(GAS_RESERVE_SOL * LAMPORTS_PER_SOL);
-    log("Balance: " + balSOL.toFixed(6) + " SOL | Gas reserve: " + GAS_RESERVE_SOL);
-
+    log("Balance: " + balSOL.toFixed(6) + " SOL");
     await updateGlobal({ currentPotSOL: balSOL });
 
     if (balLam - gasLam <= 0) {
-      log("Pot empty after gas reserve. Skipping.");
+      log("Pot empty. Skipping.");
       scheduleNext(CYCLE_MS);
       cycleEndTime = Date.now() + CYCLE_MS * 2;
       isRunning = false;
       return;
     }
 
-    // 2. Find 2 ready players — up to 5 attempts
+    // 2. Find 2 ready players
     var attempts = 0;
     while (!p1 && attempts < 5) {
       attempts++;
-      log("Attempt " + attempts + " — fetching waiting players...");
-
       var waiting = await getWaitingPlayers(4);
-      log("Waiting players found: " + waiting.length);
+      log("Waiting players: " + waiting.length);
 
       if (waiting.length < 2) {
-        log("Not enough players. Waiting for next cycle.");
+        log("Not enough players.");
         break;
       }
 
-      var rc = await readyCheck(waiting[0], waiting[1]);
+      var c1 = waiting[0];
+      var c2 = waiting[1];
+
+      // Set both to ready_check
+      var deadline   = Date.now() + READY_WINDOW_MS;
+      var deadlineTs = Timestamp.fromMillis(deadline);
+      log("Ready check: " + c1.username + " vs " + c2.username);
+      await Promise.all([
+        setPlayerStatus(c1.uid, "ready_check", { readyCheckEndsAt: deadlineTs }),
+        setPlayerStatus(c2.uid, "ready_check", { readyCheckEndsAt: deadlineTs }),
+      ]);
+
+      // Listen in real-time — resolves the INSTANT both click ready
+      var rc = await waitForBothReady(c1.uid, c2.uid);
 
       if (rc.p1Ready && rc.p2Ready) {
-        p1 = waiting[0];
-        p2 = waiting[1];
-        log("Both ready! Proceeding with: " + p1.username + " vs " + p2.username);
+        p1 = c1;
+        p2 = c2;
+        log("Both ready! Pairing: " + p1.username + " vs " + p2.username);
       } else {
-        log("Ready check failed on attempt " + attempts + ". Trying next players...");
+        // Eject non-responders and add 90s to cycle
+        if (!rc.p1Ready) { await ejectPlayer(c1.uid); cycleEndTime += READY_WINDOW_MS; }
+        if (!rc.p2Ready) { await ejectPlayer(c2.uid); cycleEndTime += READY_WINDOW_MS; }
+        log("Attempt " + attempts + " failed. Trying next players...");
       }
     }
 
     if (!p1 || !p2) {
-      log("Could not pair 2 ready players after " + attempts + " attempts.");
+      log("Could not pair players.");
       var ms1 = Math.max(cycleEndTime - Date.now(), 30000);
       scheduleNext(ms1);
       cycleEndTime = Date.now() + ms1 + CYCLE_MS;
@@ -239,20 +288,19 @@ async function runRound() {
       return;
     }
 
-    // 3. Snapshot balance NOW — this is the locked pot
-    log("Snapshotting balance for locked pot...");
+    // 3. Snapshot balance — locked pot
     var snapLam  = await getBalanceLamports();
     var sendLam  = Math.max(0, snapLam - gasLam);
     var lockedSOL = sendLam / LAMPORTS_PER_SOL;
-    log("Locked pot: " + lockedSOL.toFixed(6) + " SOL (" + sendLam + " lamports)");
+    log("Locked pot: " + lockedSOL.toFixed(6) + " SOL");
 
-    // 4. Create duel document in Firestore
+    // 4. Create duel
     var duelId     = "duel_r" + thisRound + "_" + Date.now();
     var duelNow    = Date.now();
     var chatEndsAt = Timestamp.fromMillis(duelNow + CHAT_MS);
-    var voteEndsAt = Timestamp.fromMillis(duelNow + CHAT_MS + VOTE_MS);
+    var voteEndsAt = Timestamp.fromMillis(duelNow + CHAT_MS + VOTE_MAX_MS);
 
-    log("Creating duel document: " + duelId);
+    log("Creating duel: " + duelId);
     await db.doc("sos_duels/" + duelId).set({
       player1:         p1.wallet,
       player2:         p2.wallet,
@@ -275,17 +323,16 @@ async function runRound() {
       timestamp:       Timestamp.now(),
       round:           thisRound,
     });
-    log("Duel document created OK.");
+    log("Duel created.");
 
-    // 5. Set players to in_duel
+    // 5. Immediately send both players into the duel room
     log("Setting players to in_duel...");
     await Promise.all([
       setPlayerStatus(p1.uid, "in_duel", { currentDuelId: duelId }),
       setPlayerStatus(p2.uid, "in_duel", { currentDuelId: duelId }),
     ]);
-    log("Players set to in_duel OK.");
+    log("Players are now in_duel — they will see the duel room.");
 
-    // 6. Update global stats with active duel
     await updateGlobal({
       activeDuel: {
         duelId:          duelId,
@@ -299,104 +346,68 @@ async function runRound() {
         phase:           "chat",
       },
     });
-    log("Global stats updated — duel is LIVE.");
 
-    // 7. Chat phase
-    log("Chat phase: " + (CHAT_MS/60000) + " min...");
+    // 6. Chat phase — fixed 3 minutes
+    log("Chat phase: 3 min...");
     await sleep(CHAT_MS);
+    log("Chat phase over. Moving to vote phase.");
 
     try {
       await db.doc("sos_duels/" + duelId).update({ phase: "vote" });
       await db.doc("sos_stats/global").set({ "activeDuel.phase": "vote" }, { merge: true });
-    } catch (e) {
-      log("Warning: phase update failed: " + e.message);
-    }
-    log("Vote phase: " + (VOTE_MS/60000) + " min...");
+    } catch (e) { log("Phase update warning: " + e.message); }
 
-    // 8. Vote phase
-    await sleep(VOTE_MS + 5000);
-
-    // 9. Read votes from private collection
-    log("Reading votes...");
-    var v1snap, v2snap;
-    try {
-      var vResults = await Promise.all([
-        db.doc("sos_private_votes/" + p1.uid).get(),
-        db.doc("sos_private_votes/" + p2.uid).get(),
-      ]);
-      v1snap = vResults[0];
-      v2snap = vResults[1];
-    } catch (e) {
-      log("Error reading votes: " + e.message);
-      v1snap = { exists: () => false };
-      v2snap = { exists: () => false };
-    }
-
-    var v1ok  = v1snap.exists() && v1snap.data().duelId === duelId;
-    var v2ok  = v2snap.exists() && v2snap.data().duelId === duelId;
-    var vote1 = v1ok ? v1snap.data().vote : "SPLIT";
-    var vote2 = v2ok ? v2snap.data().vote : "SPLIT";
-
-    log("Votes — P1: " + vote1 + " (voted: " + v1ok + ") | P2: " + vote2 + " (voted: " + v2ok + ")");
+    // 7. Vote phase — ends EARLY if both vote, max 2 minutes
+    log("Vote phase: up to 2 min (ends when both vote)...");
+    var votes = await waitForBothVotes(p1.uid, p2.uid, duelId);
+    var vote1 = votes.vote1;
+    var vote2 = votes.vote2;
+    log("Final votes — P1: " + vote1 + " | P2: " + vote2);
 
     var outcome = resolveOutcome(vote1, vote2);
     log("Outcome: " + outcome);
 
-    // 10. Send SOL
+    // 8. Send SOL
     var txSig = null;
-
     if (outcome === "BOTH_STEAL") {
-      log("Both stole — nobody wins, pot carries over.");
-
+      log("Both stole — pot carries over.");
     } else if (outcome === "BOTH_SPLIT") {
       var half = Math.floor(sendLam / 2);
-      log("Both split — sending " + (half/LAMPORTS_PER_SOL).toFixed(6) + " SOL each...");
+      log("Both split — sending " + (half/LAMPORTS_PER_SOL).toFixed(6) + " each...");
       var tx1 = await sendSOL(p1.wallet, half);
       var tx2 = await sendSOL(p2.wallet, half);
       txSig = tx1 + "|" + tx2;
-      log("TX1: " + tx1);
-      log("TX2: " + tx2);
-
+      log("TX1: " + tx1 + "  TX2: " + tx2);
     } else {
       var winner = outcome === "P1_STEAL" ? p1 : p2;
-      log(winner.username + " wins " + lockedSOL.toFixed(6) + " SOL...");
+      log(winner.username + " steals " + lockedSOL.toFixed(6) + " SOL...");
       txSig = await sendSOL(winner.wallet, sendLam);
       log("TX: " + txSig);
     }
 
-    // 11. Finalise — write result and clean up
-    log("Finalising duel...");
+    // 9. Finalise
     var batch = db.batch();
-
     batch.update(db.doc("sos_duels/" + duelId), {
-      vote1:       vote1,
-      vote2:       vote2,
-      outcome:     outcome,
-      status:      "COMPLETE",
-      phase:       "complete",
-      txSig:       txSig || null,
-      completedAt: Timestamp.now(),
+      vote1: vote1, vote2: vote2, outcome: outcome,
+      status: "COMPLETE", phase: "complete",
+      txSig: txSig || null, completedAt: Timestamp.now(),
     });
-
     var statsUp = {
       totalRounds:      FieldValue.increment(1),
       totalDistributed: FieldValue.increment(outcome === "BOTH_STEAL" ? 0 : lockedSOL),
       lastDuelAt:       Timestamp.now(),
       activeDuel:       null,
     };
-    if (outcome === "BOTH_SPLIT") statsUp.totalSplits = FieldValue.increment(1);
+    if (outcome === "BOTH_SPLIT")  statsUp.totalSplits  = FieldValue.increment(1);
     if (outcome === "P1_STEAL" || outcome === "P2_STEAL") statsUp.totalSteals = FieldValue.increment(1);
-
     batch.set(db.doc("sos_stats/global"), statsUp, { merge: true });
     batch.delete(db.doc("sos_private_votes/" + p1.uid));
     batch.delete(db.doc("sos_private_votes/" + p2.uid));
     batch.delete(db.doc("sos_queue/" + p1.uid));
     batch.delete(db.doc("sos_queue/" + p2.uid));
-
     await batch.commit();
-    log("Duel finalised and committed.");
+    log("Round " + thisRound + " complete and committed.");
 
-    // Update biggest pot
     try {
       var gs = await db.doc("sos_stats/global").get();
       if (gs.exists() && lockedSOL > (gs.data().biggestPot || 0)) {
@@ -404,46 +415,29 @@ async function runRound() {
       }
     } catch (e) {}
 
-    log("=== Round " + thisRound + " complete ===");
-
-    // 12. Schedule next on remaining cycle time
+    // 10. Schedule next on remaining cycle time
     var remainingMs = Math.max(cycleEndTime - Date.now(), 60000);
+    log("Cycle remaining: " + Math.round(remainingMs/1000) + "s — scheduling next round.");
     scheduleNext(remainingMs);
     cycleEndTime = Date.now() + remainingMs + CYCLE_MS;
 
   } catch (err) {
-    log("=== Round " + thisRound + " ERROR: " + (err.message || err) + " ===");
-
-    // Always clean up players so they don't stay stuck
-    if (p1) {
-      log("Cleaning up P1: " + p1.uid);
-      await ejectPlayer(p1.uid);
-    }
-    if (p2) {
-      log("Cleaning up P2: " + p2.uid);
-      await ejectPlayer(p2.uid);
-    }
-
+    log("=== ROUND ERROR: " + (err.message || err) + " ===");
+    if (p1) await ejectPlayer(p1.uid);
+    if (p2) await ejectPlayer(p2.uid);
     try {
       await updateGlobal({ activeDuel: null });
       scheduleNext(CYCLE_MS);
-    } catch (e2) {
-      log("Error in error handler: " + e2.message);
-    }
+    } catch {}
   }
 
-  log("─────────────────────────────────────\n");
+  log("─────────────────────────\n");
   isRunning = false;
 }
 
 // ── BOOT ────────────────────────────────────────────────────────────────────
-console.log("\n  $SOS Split or Steal Engine v4");
+console.log("\n  $SOS Engine v5 — Event-Driven");
 console.log("  Wallet : " + CREATOR_WALLET);
-console.log("  Token  : " + TOKEN_CA);
-log("Gas Reserve : " + GAS_RESERVE_SOL + " SOL");
-log("Chat Phase  : " + (CHAT_MS/60000) + " min");
-log("Vote Phase  : " + (VOTE_MS/60000) + " min");
-log("Cycle       : " + (CYCLE_MS/60000) + " min");
+log("Gas Reserve: " + GAS_RESERVE_SOL + " SOL | Chat: 3min | Vote: up to 2min | Cycle: 10min");
 log("────────────────────────────────────────────");
-
 runRound();
