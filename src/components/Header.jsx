@@ -28,7 +28,19 @@ export default function Header({ navigate, currentPage }) {
     const id = setInterval(() => {
       if (nextDuelRef.current) {
         const rem = nextDuelRef.current - Date.now();
-        setCountdown(rem > 0 ? rem : 0);
+        if (rem > 0) {
+          setCountdown(rem);
+        } else {
+          // Deadline passed — engine is mid-round. Keep ticking past zero
+          // so the countdown does not freeze. Reset every 10 min locally.
+          setCountdown(p => {
+            if (p <= 1000) {
+              nextDuelRef.current = null;
+              return DUEL_INTERVAL;
+            }
+            return p - 1000;
+          });
+        }
       } else {
         setCountdown(p => p <= 1000 ? DUEL_INTERVAL : p - 1000);
       }
