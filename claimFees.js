@@ -4,14 +4,15 @@
  */
 
 const {
-  Connection, PublicKey, Transaction,
+  PublicKey, Transaction,
   TransactionInstruction, SystemProgram,
   sendAndConfirmTransaction, LAMPORTS_PER_SOL,
 } = require("@solana/web3.js");
 
 const PUMP_PROGRAM_ID       = new PublicKey("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P");
 const COLLECT_DISCRIMINATOR = Buffer.from([20, 22, 86, 123, 198, 28, 219, 132]);
-const CLAIM_INTERVAL_MS     = 30 * 1000; // 30 seconds
+const CLAIM_INTERVAL_MS     = 5 * 60 * 1000;  // every 5 minutes
+const MIN_CLAIM_LAMPORTS    = 1_000_000;       // skip if under 0.001 SOL (rent dust)
 
 function deriveCreatorVault(creatorPubkey) {
   const [pda] = PublicKey.findProgramAddressSync(
@@ -54,7 +55,8 @@ async function claimCreatorFees(connection, creatorKP, log) {
     vaultBalance = await connection.getBalance(creatorVaultPDA);
   } catch { return 0; }
 
-  if (vaultBalance <= 10000) return 0;
+  // Skip if below minimum — avoids claiming rent-exempt dust repeatedly
+  if (vaultBalance <= MIN_CLAIM_LAMPORTS) return 0;
 
   log("  [claim] Vault: " + (vaultBalance/LAMPORTS_PER_SOL).toFixed(6) + " SOL — claiming...");
 
@@ -77,12 +79,14 @@ async function claimCreatorFees(connection, creatorKP, log) {
 }
 
 function startAutoClaimFees(connection, creatorKP, log) {
-  const vaultPDA  = deriveCreatorVault(creatorKP.publicKey);
-  const eventAuth = deriveEventAuthority();
+  const vaultPDA = deriveCreatorVault(creatorKP.publicKey);
   log("[AutoClaim] Vault: " + vaultPDA.toBase58());
-  log("[AutoClaim] EventAuth: " + eventAuth.toBase58());
-  log("[AutoClaim] Every " + (CLAIM_INTERVAL_MS/1000) + "s");
+  log("[AutoClaim] Every " + (CLAIM_INTERVAL_MS/60000) + " min | Min: " + (MIN_CLAIM_LAMPORTS/LAMPORTS_PER_SOL) + " SOL");
+
+  // Claim on boot
   claimCreatorFees(connection, creatorKP, log).catch(() => {});
+
+  // Then every 5 minutes
   setInterval(() => {
     claimCreatorFees(connection, creatorKP, log).catch(() => {});
   }, CLAIM_INTERVAL_MS);
