@@ -267,16 +267,30 @@ async function runRound() {
       // Listen in real-time — resolves the INSTANT both click ready
       var rc = await waitForBothReady(c1.uid, c2.uid);
 
-      if (rc.p1Ready && rc.p2Ready) {
-        p1 = c1;
-        p2 = c2;
-        log("Both ready! Pairing: " + p1.username + " vs " + p2.username);
-      } else {
-        // Eject non-responders and add 90s to cycle
-        if (!rc.p1Ready) { await ejectPlayer(c1.uid); cycleEndTime += READY_WINDOW_MS; }
-        if (!rc.p2Ready) { await ejectPlayer(c2.uid); cycleEndTime += READY_WINDOW_MS; }
-        log("Attempt " + attempts + " failed. Trying next players...");
-      }
+    if (rc.p1Ready && rc.p2Ready) {
+  p1 = c1;
+  p2 = c2;
+  log("Both ready! Pairing: " + p1.username + " vs " + p2.username);
+} else {
+  // Eject non-responders, reset responders back to waiting
+  if (!rc.p1Ready) {
+    await ejectPlayer(c1.uid);
+    cycleEndTime += READY_WINDOW_MS;
+  } else {
+    // P1 clicked ready but P2 didn't — keep P1 in queue as waiting
+    await setPlayerStatus(c1.uid, "waiting", { readyCheckEndsAt: null });
+    log("  Resetting " + c1.username + " back to waiting");
+  }
+  if (!rc.p2Ready) {
+    await ejectPlayer(c2.uid);
+    cycleEndTime += READY_WINDOW_MS;
+  } else {
+    // P2 clicked ready but P1 didn't — keep P2 in queue as waiting
+    await setPlayerStatus(c2.uid, "waiting", { readyCheckEndsAt: null });
+    log("  Resetting " + c2.username + " back to waiting");
+  }
+  log("Attempt " + attempts + " failed. Trying next players...");
+}
     }
 
     if (!p1 || !p2) {
