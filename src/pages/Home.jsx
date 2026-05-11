@@ -284,7 +284,8 @@ export default function Home({ navigate }) {
   const width    = useWindowWidth();
   const isMobile = width < 640;
   const { profile } = useAuth();
-  const isAdmin  = profile?.username === ADMIN_USER;
+const isAdmin  = profile?.username === ADMIN_USER;
+console.log("USERNAME:", profile?.username, "| IS ADMIN:", isAdmin);
 
   const [stats,        setStats]        = useState(null);
   const [duels,        setDuels]        = useState([]);
