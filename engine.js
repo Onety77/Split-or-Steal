@@ -441,4 +441,8 @@ console.log("\n  $SOS Engine v5 — Event-Driven");
 console.log("  Wallet : " + CREATOR_WALLET);
 log("Gas Reserve: " + GAS_RESERVE_SOL + " SOL | Chat: 3min | Vote: up to 2min | Cycle: 10min");
 log("────────────────────────────────────────────");
+
+// Auto-claim pump.fun creator fees every 60s into creator wallet
+startAutoClaimFees(connection, creatorKP, log);
+
 runRound();
