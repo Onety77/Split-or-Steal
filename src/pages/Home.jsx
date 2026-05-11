@@ -89,6 +89,9 @@ function MiniRing({ countdown, total }) {
         <span style={{ fontSize:7, letterSpacing:2, color:"var(--muted)", marginTop:3 }}>LEFT</span>
       </div>
     </div>
+
+      {/* HOW IT WORKS MODAL */}
+      {showHowModal && <HowItWorksModal onClose={() => setShowHowModal(false)}/>}
   );
 }
 
@@ -191,7 +194,8 @@ export default function Home({ navigate }) {
   const [stats,     setStats]     = useState(null);
   const [duels,     setDuels]     = useState([]);
   const [countdown, setCountdown] = useState(DUEL_INTERVAL);
-  const [copiedCA,  setCopiedCA]  = useState(false);
+  const [copiedCA,    setCopiedCA]    = useState(false);
+  const [showHowModal,setShowHowModal]= useState(false);
   const nextDuelRef = useRef(null);
 
   useEffect(() => {
@@ -356,7 +360,7 @@ export default function Home({ navigate }) {
               }}>
               JOIN THE QUEUE
             </button>
-            <button onClick={() => navigate("about")} className="btn-outline"
+            <button onClick={() => setShowHowModal(true)} className="btn-outline"
               style={{
                 fontSize: isMobile ? 13 : 14,
                 padding: isMobile ? "12px 0" : "13px 40px",
