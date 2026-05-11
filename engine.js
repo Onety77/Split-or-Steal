@@ -141,7 +141,7 @@ function waitForBothReady(p1uid, p2uid) {
     }, READY_WINDOW_MS + 2000);
 
     unsubP1 = db.doc("sos_queue/" + p1uid).onSnapshot(function(snap) {
-      if (!snap.exists()) return;
+      if (!snap.exists) return;
       if (snap.data().status === "ready") {
         log("  P1 clicked READY");
         p1Ready = true;
@@ -150,7 +150,7 @@ function waitForBothReady(p1uid, p2uid) {
     });
 
     unsubP2 = db.doc("sos_queue/" + p2uid).onSnapshot(function(snap) {
-      if (!snap.exists()) return;
+      if (!snap.exists) return;
       if (snap.data().status === "ready") {
         log("  P2 clicked READY");
         p2Ready = true;
@@ -191,7 +191,7 @@ function waitForBothVotes(p1uid, p2uid, duelId) {
     }, VOTE_MAX_MS);
 
     unsubV1 = db.doc("sos_private_votes/" + p1uid).onSnapshot(function(snap) {
-      if (snap.exists() && snap.data().duelId === duelId && snap.data().vote) {
+      if (snap.exists && snap.data().duelId === duelId && snap.data().vote) {
         vote1 = snap.data().vote;
         log("  P1 voted: " + vote1);
         check();
@@ -199,7 +199,7 @@ function waitForBothVotes(p1uid, p2uid, duelId) {
     });
 
     unsubV2 = db.doc("sos_private_votes/" + p2uid).onSnapshot(function(snap) {
-      if (snap.exists() && snap.data().duelId === duelId && snap.data().vote) {
+      if (snap.exists && snap.data().duelId === duelId && snap.data().vote) {
         vote2 = snap.data().vote;
         log("  P2 voted: " + vote2);
         check();
