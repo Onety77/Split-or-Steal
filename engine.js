@@ -1,4 +1,5 @@
 require("dotenv").config();
+const { startAutoClaimFees } = require("./claimFees");
 
 const {
   Connection, PublicKey, Transaction,
@@ -18,7 +19,7 @@ const GAS_RESERVE_SOL = parseFloat(process.env.GAS_RESERVE_SOL || "0.002");
 const READY_WINDOW_MS = 90 * 1000;   // max time to wait for both to click ready
 const CHAT_MS         =  3 * 60 * 1000;  // fixed 3min chat phase
 const VOTE_MAX_MS     =  2 * 60 * 1000;  // max 2min vote — ends early if both vote
-const CYCLE_MS        = 1.5 * 60 * 1000;  // base 10min cycle
+const CYCLE_MS        = 10 * 60 * 1000;  // base 10min cycle
 
 // ── STARTUP CHECKS ──────────────────────────────────────────────────────────
 const missing = ["CREATOR_PRIVATE_KEY","FIREBASE_SERVICE_ACCOUNT_JSON","CREATOR_WALLET","TOKEN_CA"]
@@ -141,7 +142,7 @@ function waitForBothReady(p1uid, p2uid) {
     }, READY_WINDOW_MS + 2000);
 
     unsubP1 = db.doc("sos_queue/" + p1uid).onSnapshot(function(snap) {
-      if (!snap.exists) return;
+      if (!snap.exists()) return;
       if (snap.data().status === "ready") {
         log("  P1 clicked READY");
         p1Ready = true;
@@ -150,7 +151,7 @@ function waitForBothReady(p1uid, p2uid) {
     });
 
     unsubP2 = db.doc("sos_queue/" + p2uid).onSnapshot(function(snap) {
-      if (!snap.exists) return;
+      if (!snap.exists()) return;
       if (snap.data().status === "ready") {
         log("  P2 clicked READY");
         p2Ready = true;
@@ -191,7 +192,7 @@ function waitForBothVotes(p1uid, p2uid, duelId) {
     }, VOTE_MAX_MS);
 
     unsubV1 = db.doc("sos_private_votes/" + p1uid).onSnapshot(function(snap) {
-      if (snap.exists && snap.data().duelId === duelId && snap.data().vote) {
+      if (snap.exists() && snap.data().duelId === duelId && snap.data().vote) {
         vote1 = snap.data().vote;
         log("  P1 voted: " + vote1);
         check();
@@ -199,7 +200,7 @@ function waitForBothVotes(p1uid, p2uid, duelId) {
     });
 
     unsubV2 = db.doc("sos_private_votes/" + p2uid).onSnapshot(function(snap) {
-      if (snap.exists && snap.data().duelId === duelId && snap.data().vote) {
+      if (snap.exists() && snap.data().duelId === duelId && snap.data().vote) {
         vote2 = snap.data().vote;
         log("  P2 voted: " + vote2);
         check();
@@ -267,30 +268,16 @@ async function runRound() {
       // Listen in real-time — resolves the INSTANT both click ready
       var rc = await waitForBothReady(c1.uid, c2.uid);
 
-    if (rc.p1Ready && rc.p2Ready) {
-  p1 = c1;
-  p2 = c2;
-  log("Both ready! Pairing: " + p1.username + " vs " + p2.username);
-} else {
-  // Eject non-responders, reset responders back to waiting
-  if (!rc.p1Ready) {
-    await ejectPlayer(c1.uid);
-    cycleEndTime += READY_WINDOW_MS;
-  } else {
-    // P1 clicked ready but P2 didn't — keep P1 in queue as waiting
-    await setPlayerStatus(c1.uid, "waiting", { readyCheckEndsAt: null });
-    log("  Resetting " + c1.username + " back to waiting");
-  }
-  if (!rc.p2Ready) {
-    await ejectPlayer(c2.uid);
-    cycleEndTime += READY_WINDOW_MS;
-  } else {
-    // P2 clicked ready but P1 didn't — keep P2 in queue as waiting
-    await setPlayerStatus(c2.uid, "waiting", { readyCheckEndsAt: null });
-    log("  Resetting " + c2.username + " back to waiting");
-  }
-  log("Attempt " + attempts + " failed. Trying next players...");
-}
+      if (rc.p1Ready && rc.p2Ready) {
+        p1 = c1;
+        p2 = c2;
+        log("Both ready! Pairing: " + p1.username + " vs " + p2.username);
+      } else {
+        // Eject non-responders and add 90s to cycle
+        if (!rc.p1Ready) { await ejectPlayer(c1.uid); cycleEndTime += READY_WINDOW_MS; }
+        if (!rc.p2Ready) { await ejectPlayer(c2.uid); cycleEndTime += READY_WINDOW_MS; }
+        log("Attempt " + attempts + " failed. Trying next players...");
+      }
     }
 
     if (!p1 || !p2) {
