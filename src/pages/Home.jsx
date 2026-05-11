@@ -151,6 +151,7 @@ function DuelDetailModal({ duel, onClose, isAdmin }) {
   const isSteal = duel.outcome==="BOTH_STEAL";
 
   // Build tweet for admin
+ const round   = duel.round ? "ROUND " + duel.round : "RECENT ROUND";
 const tweetText = isSplit
   ? `🤝 SPLIT OR STEAL — ${round}\n\n${duel.player1Username} split with ${duel.player2Username}\n◎ ${fmtSOL(duel.amount)} SOL shared equally\n\nBoth walked away with something.\nTrust is rare on-chain.\n\nsplitorsteal.xyz\n$SOS #SplitOrSteal #Solana`
   : isSteal
