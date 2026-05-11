@@ -23,12 +23,13 @@ function playReadySound() {
   } catch {}
 }
 
-function sendBrowserNotification() {
+function sendBrowserNotification(potSOL) {
   try {
     if (!("Notification" in window)) return;
     if (Notification.permission !== "granted") return;
+    const potStr = potSOL ? " — ◎" + potSOL.toFixed(4) + " at stake" : "";
     new Notification("⚔️ It's your turn — $SOS", {
-      body: "Click READY to enter the duel room.",
+      body: "Click READY to enter the duel room" + potStr + ".",
       icon: "/logo.png",
       requireInteraction: true,
     });
@@ -49,8 +50,7 @@ const RR = 70;
 const CC = 2 * Math.PI * RR;
 
 function BigRing({ seconds }) {
-  const total  = 90;
-  const pct    = Math.max(0, seconds / total);
+  const pct    = Math.max(0, seconds / 90);
   const offset = CC * (1 - pct);
   const urgent = seconds <= 20;
   return (
@@ -77,12 +77,25 @@ function BigRing({ seconds }) {
 
 export default function ReadyCheckOverlay({ navigate }) {
   const { user } = useAuth();
+
   const [entry,        setEntry]        = useState(null);
+  const [potSOL,       setPotSOL]       = useState(null);
   const [seconds,      setSeconds]      = useState(90);
   const [readyLoading, setReadyLoading] = useState(false);
+
   const soundFired = useRef(false);
   const timerRef   = useRef(null);
 
+  // Listen to global stats for current pot
+  useEffect(() => {
+    return onSnapshot(doc(db, "sos_stats", "global"), snap => {
+      if (!snap.exists()) return;
+      const d = snap.data();
+      setPotSOL(d.currentPotSOL ?? null);
+    });
+  }, []);
+
+  // Listen to user's queue entry
   useEffect(() => {
     if (!user) return;
     return onSnapshot(doc(db, "sos_queue", user.uid), (snap) => {
@@ -94,11 +107,10 @@ export default function ReadyCheckOverlay({ navigate }) {
       const data = { id: snap.id, ...snap.data() };
       setEntry(data);
 
-      // Fire sound + notification on ready_check
       if (data.status === "ready_check" && !soundFired.current) {
         soundFired.current = true;
         playReadySound();
-        sendBrowserNotification();
+        sendBrowserNotification(potSOL);
         if (data.readyCheckEndsAt) {
           const ms = data.readyCheckEndsAt.toMillis() - Date.now();
           setSeconds(Math.max(0, Math.floor(ms / 1000)));
@@ -111,12 +123,12 @@ export default function ReadyCheckOverlay({ navigate }) {
         soundFired.current = false;
       }
 
-      // When engine sets us to in_duel — navigate immediately
+      // Navigate to duel room the instant engine sets us to in_duel
       if (data.status === "in_duel" && data.currentDuelId) {
         navigate("duel");
       }
     });
-  }, [user, navigate]);
+  }, [user, navigate, potSOL]);
 
   // Countdown ticker
   useEffect(() => {
@@ -144,11 +156,12 @@ export default function ReadyCheckOverlay({ navigate }) {
     try { await deleteDoc(doc(db, "sos_queue", user.uid)); } catch {}
   };
 
-  // Show overlay for both ready_check AND ready states
   if (!entry || (entry.status !== "ready_check" && entry.status !== "ready")) return null;
 
   const isReadyCheck = entry.status === "ready_check";
-  const isReady      = entry.status === "ready";
+
+  const fmtSOL = (n) => (!n && n !== 0) ? null : n.toFixed(4);
+  const potStr = fmtSOL(potSOL);
 
   return (
     <div style={{
@@ -159,24 +172,41 @@ export default function ReadyCheckOverlay({ navigate }) {
       padding:"24px",
       animation:"fade-in 0.3s ease",
     }}>
-      {/* Glow */}
       <div style={{ position:"absolute", width:320, height:320, borderRadius:"50%", background:"radial-gradient(circle, rgba(255,184,0,0.18) 0%, transparent 70%)", animation:"glow-gold 2s ease-in-out infinite", pointerEvents:"none" }}/>
 
       <div style={{ position:"relative", zIndex:2, textAlign:"center", maxWidth:420, width:"100%" }}>
 
-        {/* ── READY CHECK STATE ── */}
+        {/* ── READY CHECK ── */}
         {isReadyCheck && (
           <>
             <div style={{ fontSize:64, marginBottom:16, animation:"winner-burst 0.6s ease" }}>⚔️</div>
-            <h2 style={{ fontFamily:"'Russo One',sans-serif", fontSize:"clamp(28px,7vw,48px)", letterSpacing:"0.08em", color:"var(--gold)", marginBottom:10, animation:"countdown-urgent 2s ease infinite" }}>
+            <h2 style={{ fontFamily:"'Russo One',sans-serif", fontSize:"clamp(28px,7vw,48px)", letterSpacing:"0.08em", color:"var(--gold)", marginBottom:12, animation:"countdown-urgent 2s ease infinite" }}>
               YOU'RE UP!
             </h2>
-            <p style={{ fontFamily:"'Barlow',sans-serif", fontSize:15, color:"var(--muted)", lineHeight:1.65, marginBottom:32, maxWidth:340, margin:"0 auto 32px" }}>
-              Your duel is starting. Click READY to lock in and enter the room.
+
+            {/* SOL at stake */}
+            {potStr && (
+              <div style={{
+                display:"inline-flex", alignItems:"center", gap:10,
+                padding:"10px 24px",
+                background:"rgba(255,184,0,0.08)",
+                border:"1px solid rgba(255,184,0,0.25)",
+                borderRadius:30,
+                marginBottom:20,
+              }}>
+                <span style={{ fontFamily:"'Oswald',sans-serif", fontSize:11, letterSpacing:3, color:"var(--muted)" }}>AT STAKE</span>
+                <span style={{ fontFamily:"'Russo One',sans-serif", fontSize:22, color:"var(--gold)" }}>◎ {potStr}</span>
+              </div>
+            )}
+
+            <p style={{ fontFamily:"'Barlow',sans-serif", fontSize:15, color:"var(--muted)", lineHeight:1.65, marginBottom:28, maxWidth:340, margin:"0 auto 28px" }}>
+              Click READY to lock in and enter the duel room.
             </p>
-            <div style={{ display:"flex", justifyContent:"center", marginBottom:32 }}>
+
+            <div style={{ display:"flex", justifyContent:"center", marginBottom:28 }}>
               <BigRing seconds={seconds}/>
             </div>
+
             <button onClick={clickReady} disabled={readyLoading} style={{
               background:"linear-gradient(135deg,#FF8C00,#FFB800)",
               border:"none", borderRadius:12, color:"#000",
@@ -193,8 +223,9 @@ export default function ReadyCheckOverlay({ navigate }) {
             }}>
               {readyLoading ? "..." : "⚔️  I'M READY"}
             </button>
+
             <p style={{ fontSize:12, color:"var(--dim)", fontFamily:"'Barlow',sans-serif" }}>
-              Can't play right now?{" "}
+              Can't play?{" "}
               <button onClick={leaveQueue} style={{ background:"none", border:"none", cursor:"pointer", color:"var(--red2)", fontSize:12, fontFamily:"'Barlow',sans-serif", textDecoration:"underline" }}>
                 Leave the queue
               </button>
@@ -202,27 +233,39 @@ export default function ReadyCheckOverlay({ navigate }) {
           </>
         )}
 
-        {/* ── READY STATE — waiting for opponent ── */}
-        {isReady && (
+        {/* ── READY — waiting for opponent ── */}
+        {!isReadyCheck && (
           <>
             <div style={{ fontSize:64, marginBottom:20 }}>✅</div>
             <h2 style={{ fontFamily:"'Russo One',sans-serif", fontSize:"clamp(24px,6vw,40px)", letterSpacing:"0.08em", color:"var(--green)", marginBottom:12 }}>
               YOU'RE IN!
             </h2>
-            <p style={{ fontFamily:"'Barlow',sans-serif", fontSize:16, color:"var(--muted)", lineHeight:1.65, marginBottom:36 }}>
+
+            {potStr && (
+              <div style={{
+                display:"inline-flex", alignItems:"center", gap:10,
+                padding:"8px 20px",
+                background:"rgba(0,200,83,0.08)",
+                border:"1px solid rgba(0,200,83,0.2)",
+                borderRadius:30,
+                marginBottom:20,
+              }}>
+                <span style={{ fontFamily:"'Oswald',sans-serif", fontSize:11, letterSpacing:3, color:"var(--muted)" }}>FIGHTING FOR</span>
+                <span style={{ fontFamily:"'Russo One',sans-serif", fontSize:22, color:"var(--green)" }}>◎ {potStr}</span>
+              </div>
+            )}
+
+            <p style={{ fontFamily:"'Barlow',sans-serif", fontSize:16, color:"var(--muted)", lineHeight:1.65, marginBottom:32 }}>
               Waiting for your opponent to click READY.<br/>
-              The duel room will open automatically.
+              The duel room opens automatically.
             </p>
-            {/* Pulsing waiting indicator */}
-            <div style={{ display:"flex", justifyContent:"center", gap:10, marginBottom:36 }}>
+
+            <div style={{ display:"flex", justifyContent:"center", gap:10, marginBottom:32 }}>
               {[0,1,2].map(i => (
-                <div key={i} style={{
-                  width:12, height:12, borderRadius:"50%",
-                  background:"var(--gold)",
-                  animation:"led-breathe 1.2s ease-in-out " + (i * 0.3) + "s infinite",
-                }}/>
+                <div key={i} style={{ width:12, height:12, borderRadius:"50%", background:"var(--gold)", animation:"led-breathe 1.2s ease-in-out " + (i*0.3) + "s infinite" }}/>
               ))}
             </div>
+
             <p style={{ fontSize:12, color:"var(--dim)", fontFamily:"'Barlow',sans-serif" }}>
               Changed your mind?{" "}
               <button onClick={leaveQueue} style={{ background:"none", border:"none", cursor:"pointer", color:"var(--red2)", fontSize:12, fontFamily:"'Barlow',sans-serif", textDecoration:"underline" }}>
@@ -231,7 +274,6 @@ export default function ReadyCheckOverlay({ navigate }) {
             </p>
           </>
         )}
-
       </div>
     </div>
   );

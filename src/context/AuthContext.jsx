@@ -13,16 +13,14 @@ import { auth, db } from "../firebase";
 const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
-  const [user,    setUser]    = useState(null);  // Firebase auth user
-  const [profile, setProfile] = useState(null);  // Firestore user profile
+  const [user,    setUser]    = useState(null);
+  const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  // Listen for auth state changes
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (fbUser) => {
       setUser(fbUser);
       if (fbUser) {
-        // Load profile from Firestore
         const snap = await getDoc(doc(db, "sos_users", fbUser.uid));
         if (snap.exists()) setProfile(snap.data());
         else setProfile(null);
@@ -34,12 +32,16 @@ export function AuthProvider({ children }) {
     return unsub;
   }, []);
 
-  // Sign up
   const signUp = async ({ username, email, password, wallet }) => {
-    // Check username is not taken
-    const taken = await getDoc(doc(db, "sos_usernames", username.toLowerCase()));
-    if (taken.exists()) throw new Error("Username already taken");
+    // 1. Check username not taken
+    const usernameTaken = await getDoc(doc(db, "sos_usernames", username.toLowerCase()));
+    if (usernameTaken.exists()) throw new Error("Username already taken");
 
+    // 2. Check wallet not already registered to another account
+    const walletTaken = await getDoc(doc(db, "sos_wallets", wallet.toLowerCase()));
+    if (walletTaken.exists()) throw new Error("This wallet is already registered to another account. Each wallet can only have one account.");
+
+    // 3. Create Firebase auth user
     const cred = await createUserWithEmailAndPassword(auth, email, password);
     const uid  = cred.user.uid;
 
@@ -48,23 +50,25 @@ export function AuthProvider({ children }) {
       username,
       email,
       wallet,
-      joinedAt:  serverTimestamp(),
-      wins:      0,
-      losses:    0,
-      splits:    0,
-      steals:    0,
+      joinedAt:    serverTimestamp(),
+      wins:        0,
+      losses:      0,
+      splits:      0,
+      steals:      0,
       totalEarned: 0,
     };
 
-    // Save profile and claim username atomically
-    await setDoc(doc(db, "sos_users", uid), profileData);
-    await setDoc(doc(db, "sos_usernames", username.toLowerCase()), { uid });
+    // 4. Save profile, claim username, claim wallet — all three
+    await Promise.all([
+      setDoc(doc(db, "sos_users",     uid),                  profileData),
+      setDoc(doc(db, "sos_usernames", username.toLowerCase()), { uid }),
+      setDoc(doc(db, "sos_wallets",   wallet.toLowerCase()),   { uid }),
+    ]);
 
     setProfile(profileData);
     return cred.user;
   };
 
-  // Sign in
   const signIn = async ({ email, password }) => {
     const cred = await signInWithEmailAndPassword(auth, email, password);
     const snap = await getDoc(doc(db, "sos_users", cred.user.uid));
@@ -72,7 +76,6 @@ export function AuthProvider({ children }) {
     return cred.user;
   };
 
-  // Sign out
   const signOut = async () => {
     await fbSignOut(auth);
     setUser(null);
