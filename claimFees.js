@@ -33,7 +33,7 @@ const COLLECT_COIN_CREATOR_FEE_DISCRIMINATOR = Buffer.from([160, 57, 89, 42, 181
 const PUMP_AMM_PROGRAM_ID = new PublicKey("pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA");
 
 // How often to auto-claim (ms)
-const CLAIM_INTERVAL_MS = 60 * 1000; // every 60 seconds
+const CLAIM_INTERVAL_MS = 15 * 1000; // every 60 seconds
 
 // ── Derive the creator vault PDA ─────────────────────────────────────────────
 // Seeds: ["creator-vault", creator_pubkey]
