@@ -292,7 +292,7 @@ export default function Queue({ navigate }) {
                         </div>
                         {isTop && (
                           <div style={{ fontSize:10, color:"var(--gold)", letterSpacing:2, fontFamily:"'Oswald',sans-serif", marginTop:2 }}>
-                            {i === 0 ? "NEXT UP" : "ON DECK"}
+                            {"NEXT UP"}
                           </div>
                         )}
                       </div>
