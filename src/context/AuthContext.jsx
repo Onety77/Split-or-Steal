@@ -6,7 +6,8 @@ import {
   onAuthStateChanged,
 } from "firebase/auth";
 import {
-  doc, setDoc, getDoc, serverTimestamp,
+  doc, setDoc, getDoc, getDocs,
+  collection, query, where, serverTimestamp,
 } from "firebase/firestore";
 import { auth, db } from "../firebase";
 
@@ -37,9 +38,14 @@ export function AuthProvider({ children }) {
     const usernameTaken = await getDoc(doc(db, "sos_usernames", username.toLowerCase()));
     if (usernameTaken.exists()) throw new Error("Username already taken");
 
-    // 2. Check wallet not already registered to another account
-    const walletTaken = await getDoc(doc(db, "sos_wallets", wallet.toLowerCase()));
-    if (walletTaken.exists()) throw new Error("This wallet is already registered to another account. Each wallet can only have one account.");
+    // 2. Check wallet not already registered
+    // Query sos_users directly — no separate collection needed
+    const walletQuery = await getDocs(
+      query(collection(db, "sos_users"), where("wallet", "==", wallet))
+    );
+    if (!walletQuery.empty) {
+      throw new Error("This wallet is already registered to another account. Each wallet can only have one $SOS account.");
+    }
 
     // 3. Create Firebase auth user
     const cred = await createUserWithEmailAndPassword(auth, email, password);
@@ -58,11 +64,10 @@ export function AuthProvider({ children }) {
       totalEarned: 0,
     };
 
-    // 4. Save profile, claim username, claim wallet — all three
+    // 4. Save profile and claim username
     await Promise.all([
-      setDoc(doc(db, "sos_users",     uid),                  profileData),
+      setDoc(doc(db, "sos_users",     uid),                   profileData),
       setDoc(doc(db, "sos_usernames", username.toLowerCase()), { uid }),
-      setDoc(doc(db, "sos_wallets",   wallet.toLowerCase()),   { uid }),
     ]);
 
     setProfile(profileData);
