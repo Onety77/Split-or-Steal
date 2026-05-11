@@ -151,14 +151,13 @@ function DuelDetailModal({ duel, onClose, isAdmin }) {
   const isSteal = duel.outcome==="BOTH_STEAL";
 
   // Build tweet for admin
-  const tweetText = isSplit
-    ? duel.player1Username+" and "+duel.player2Username+" both SPLIT ◎"+fmtSOL(duel.amount)+" on $SOS 🤝 Trust still exists on-chain."
-    : isSteal
-    ? "Both "+duel.player1Username+" and "+duel.player2Username+" chose STEAL on $SOS 💀 Nobody wins. The pot grows."
-    : duel.vote1==="STEAL"
-    ? duel.player1Username+" BETRAYED "+duel.player2Username+" and stole ◎"+fmtSOL(duel.amount)+" on $SOS 🗡️ Ruthless."
-    : duel.player2Username+" BETRAYED "+duel.player1Username+" and stole ◎"+fmtSOL(duel.amount)+" on $SOS 🗡️ Ruthless.";
-
+const tweetText = isSplit
+  ? `🤝 SPLIT OR STEAL — ${round}\n\n${duel.player1Username} split with ${duel.player2Username}\n◎ ${fmtSOL(duel.amount)} SOL shared equally\n\nBoth walked away with something.\nTrust is rare on-chain.\n\nsplitorsteal.xyz\n$SOS #SplitOrSteal #Solana`
+  : isSteal
+  ? `💀 SPLIT OR STEAL — ${round}\n\n${duel.player1Username} vs ${duel.player2Username}\n◎ ${fmtSOL(duel.amount)} SOL — NOBODY WINS\n\nBoth reached for everything.\nBoth got nothing. The pot grows.\n\nsplitorsteal.xyz\n$SOS #SplitOrSteal #Solana`
+  : duel.vote1==="STEAL"
+  ? `🗡️ SPLIT OR STEAL — ${round}\n\n${duel.player1Username} BETRAYED ${duel.player2Username}\n◎ ${fmtSOL(duel.amount)} SOL stolen\n\n${duel.player2Username} chose SPLIT.\n${duel.player1Username} chose STEAL.\nNo mercy.\n\nsplitorsteal.xyz\n$SOS #SplitOrSteal #Solana`
+  : `🗡️ SPLIT OR STEAL — ${round}\n\n${duel.player2Username} BETRAYED ${duel.player1Username}\n◎ ${fmtSOL(duel.amount)} SOL stolen\n\n${duel.player1Username} chose SPLIT.\n${duel.player2Username} chose STEAL.\nNo mercy.\n\nsplitorsteal.xyz\n$SOS #SplitOrSteal #Solana`;
   const tweetUrl = "https://twitter.com/intent/tweet?text="+encodeURIComponent(tweetText);
 
   return (
