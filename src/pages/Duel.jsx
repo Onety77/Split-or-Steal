@@ -1,34 +1,37 @@
 import { useState, useEffect, useRef } from "react";
 import {
   doc, onSnapshot, collection, addDoc, setDoc,
-  serverTimestamp, query, orderBy, getDoc,
+  serverTimestamp, query, orderBy,
 } from "firebase/firestore";
 import { db } from "../firebase";
 import { useAuth } from "../context/AuthContext";
 import Orb from "../components/Orb";
 
-// ── Helpers ────────────────────────────────────────────────────────────────
 const short  = (a) => a ? `${a.slice(0,4)}...${a.slice(-4)}` : "—";
 const fmtSOL = (n) => (!n && n !== 0) ? "—" : n.toFixed(4);
 
-// ── Countdown ring ─────────────────────────────────────────────────────────
+// ── Phase ring ─────────────────────────────────────────────────────────────
 const R2 = 44;
 const C2 = 2 * Math.PI * R2;
 
-function SmallRing({ seconds, total }) {
-  const pct    = Math.max(0, seconds / total);
+function PhaseRing({ seconds, totalSeconds, phase }) {
+  const pct    = Math.max(0, seconds / totalSeconds);
   const offset = C2 * (1 - pct);
   const mins   = Math.floor(seconds / 60);
   const secs   = seconds % 60;
   const str    = `${String(mins).padStart(2,"0")}:${String(secs).padStart(2,"0")}`;
   const urgent = seconds < 30;
+  const isVote = phase === "vote";
+  const color  = urgent ? "#FF3333" : isVote ? "#CC2020" : "#FFB800";
 
   return (
     <div style={{ position:"relative", width:100, height:100, flexShrink:0 }}>
-      <svg width="100" height="100" viewBox="0 0 100 100" style={{ transform:"rotate(-90deg)" }}>
-        <circle cx="50" cy="50" r={R2} fill="none" stroke="rgba(255,184,0,0.07)" strokeWidth="3"/>
+      <svg width="100" height="100" viewBox="0 0 100 100"
+        style={{ transform:"rotate(-90deg)" }}>
         <circle cx="50" cy="50" r={R2} fill="none"
-          stroke={urgent ? "#FF3333" : "#FFB800"} strokeWidth="3"
+          stroke="rgba(255,255,255,0.07)" strokeWidth="3"/>
+        <circle cx="50" cy="50" r={R2} fill="none"
+          stroke={color} strokeWidth="3"
           strokeLinecap="round" strokeDasharray={C2} strokeDashoffset={offset}
           style={{ transition:"stroke-dashoffset 1s linear" }}/>
       </svg>
@@ -38,12 +41,12 @@ function SmallRing({ seconds, total }) {
         alignItems:"center", justifyContent:"center",
       }}>
         <span style={{
-          fontFamily:"'Russo One',sans-serif",
-          fontSize:16, lineHeight:1,
-          color: urgent ? "var(--red2)" : "var(--gold)",
-          animation: urgent ? "countdown-urgent 0.8s ease infinite" : "none",
+          fontFamily:"'Russo One',sans-serif", fontSize:15, lineHeight:1,
+          color, animation: urgent ? "countdown-urgent 0.8s ease infinite" : "none",
         }}>{str}</span>
-        <span style={{ fontSize:7, letterSpacing:2, color:"var(--muted)", marginTop:3 }}>LEFT</span>
+        <span style={{ fontSize:7, letterSpacing:2, color:"var(--muted)", marginTop:3 }}>
+          {phase === "chat" ? "TO CHAT" : "TO VOTE"}
+        </span>
       </div>
     </div>
   );
@@ -53,34 +56,31 @@ function SmallRing({ seconds, total }) {
 export default function Duel({ navigate }) {
   const { user, profile } = useAuth();
 
-  const [queueEntry, setQueueEntry]  = useState(null);
-  const [duel,       setDuel]        = useState(null);
-  const [messages,   setMessages]    = useState([]);
-  const [chatInput,  setChatInput]   = useState("");
-  const [myVote,     setMyVote]      = useState(null);  // "SPLIT" | "STEAL" | null
+  const [queueEntry,    setQueueEntry]    = useState(null);
+  const [duel,          setDuel]          = useState(null);
+  const [messages,      setMessages]      = useState([]);
+  const [chatInput,     setChatInput]     = useState("");
+  const [myVote,        setMyVote]        = useState(null);
   const [voteSubmitted, setVoteSubmitted] = useState(false);
-  const [secondsLeft,   setSecondsLeft]   = useState(5 * 60);
-  const [revealed,      setRevealed]      = useState(false);
-  const [chatOpen,      setChatOpen]      = useState(false);
+  const [chatReady,     setChatReady]     = useState(false); // I clicked ready
+  const [secondsLeft,   setSecondsLeft]   = useState(0);
 
-  const chatEndRef = useRef(null);
-  const timerRef   = useRef(null);
+  const chatEndRef  = useRef(null);
+  const timerRef    = useRef(null);
+  const phaseRef    = useRef(null);
 
-  // Watch my queue entry for current duel ID
+  // Watch queue entry
   useEffect(() => {
     if (!user) { navigate("auth"); return; }
     return onSnapshot(doc(db, "sos_queue", user.uid), snap => {
-      if (!snap.exists()) {
-        setQueueEntry(null);
-        return;
-      }
+      if (!snap.exists()) { setQueueEntry(null); return; }
       setQueueEntry({ id: snap.id, ...snap.data() });
     });
   }, [user, navigate]);
 
-  // Load duel from Firestore when we have a duelId
   const duelId = queueEntry?.currentDuelId;
 
+  // Watch duel
   useEffect(() => {
     if (!duelId) return;
     return onSnapshot(doc(db, "sos_duels", duelId), snap => {
@@ -88,55 +88,59 @@ export default function Duel({ navigate }) {
       const d = snap.data();
       setDuel({ id: snap.id, ...d });
 
-      // Set revealed when outcome is ready
-      if (d.status === "COMPLETE") setRevealed(true);
-
-      // Compute seconds left
-      if (d.endsAt && d.status === "ACTIVE") {
-        const ms = d.endsAt.toMillis() - Date.now();
+      // Update timer based on current phase
+      const now = Date.now();
+      if (d.phase === "chat" && d.chatEndsAt) {
+        const ms = d.chatEndsAt.toMillis() - now;
         setSecondsLeft(Math.max(0, Math.floor(ms / 1000)));
+        phaseRef.current = "chat";
+      } else if (d.phase === "vote" && d.voteEndsAt) {
+        const ms = d.voteEndsAt.toMillis() - now;
+        setSecondsLeft(Math.max(0, Math.floor(ms / 1000)));
+        phaseRef.current = "vote";
       }
     });
   }, [duelId]);
 
-  // Live chat messages
+  // Live chat
   useEffect(() => {
     if (!duelId) return;
     const q = query(
       collection(db, "sos_duels", duelId, "chat"),
       orderBy("timestamp","asc")
     );
-    return onSnapshot(q, snap => {
-      setMessages(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-    });
+    return onSnapshot(q, snap =>
+      setMessages(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+    );
   }, [duelId]);
 
   // Countdown ticker
   useEffect(() => {
-    if (!duel || duel.status !== "ACTIVE") return;
+    if (!duel || duel.status === "COMPLETE") {
+      clearInterval(timerRef.current);
+      return;
+    }
     timerRef.current = setInterval(() => {
-      setSecondsLeft(p => {
-        if (p <= 1) { clearInterval(timerRef.current); return 0; }
-        return p - 1;
-      });
+      setSecondsLeft(p => Math.max(0, p - 1));
     }, 1000);
     return () => clearInterval(timerRef.current);
-  }, [duel?.status]);
+  }, [duel?.phase, duel?.status]);
 
   // Auto-scroll chat
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior:"smooth" });
   }, [messages]);
 
-  // Determine if I'm player 1 or 2
   const amP1       = duel && user && duel.player1Uid === user.uid;
   const amP2       = duel && user && duel.player2Uid === user.uid;
-  const myRole     = amP1 ? "player1" : amP2 ? "player2" : null;
   const oppUsername= amP1 ? duel?.player2Username : duel?.player1Username;
-  const oppWallet  = amP1 ? duel?.player2 : duel?.player1;
-
-  const isActive   = duel?.status === "ACTIVE";
+  const phase      = duel?.phase;
+  const isChatPhase= phase === "chat";
+  const isVotePhase= phase === "vote";
   const isComplete = duel?.status === "COMPLETE";
+
+  const chatTotalSec = 3 * 60;
+  const voteTotalSec = 2 * 60;
 
   // Send chat message
   const sendMessage = async (e) => {
@@ -154,44 +158,40 @@ export default function Duel({ navigate }) {
     } catch (err) { console.error(err); }
   };
 
-  // Submit vote (stored in private collection — only Admin SDK can read)
+  // Submit vote
   const submitVote = async (vote) => {
-    if (voteSubmitted || !user || !duelId) return;
+    if (voteSubmitted || !user || !duelId || !isVotePhase) return;
     setMyVote(vote);
     try {
       await setDoc(doc(db, "sos_private_votes", user.uid), {
-        vote,
-        duelId,
-        uid:       user.uid,
-        timestamp: serverTimestamp(),
+        vote, duelId, uid: user.uid, timestamp: serverTimestamp(),
       });
       setVoteSubmitted(true);
+      // Update hasVoted flag on duel doc for opponent indicator
+      const field = amP1 ? "hasVoted1" : "hasVoted2";
+      await setDoc(doc(db, "sos_duels", duelId), { [field]: true }, { merge: true });
     } catch (err) {
       console.error(err);
       setMyVote(null);
     }
   };
 
-  // ── No duel active ─────────────────────────────────────────────────────
+  // ── No active duel ─────────────────────────────────────────────────────
   if (!queueEntry || !queueEntry.currentDuelId) {
     return (
       <div className="page" style={{
-        minHeight:"100vh",
-        display:"flex", flexDirection:"column",
+        minHeight:"100vh", display:"flex", flexDirection:"column",
         alignItems:"center", justifyContent:"center",
-        padding:"100px 24px",
-        textAlign:"center",
+        padding:"100px 24px", textAlign:"center",
       }}>
-        <div style={{ fontSize:64, marginBottom:20, opacity:0.4 }}>⚔️</div>
-        <h2 style={{
-          fontFamily:"'Russo One',sans-serif",
-          fontSize:28, letterSpacing:"0.08em",
-          color:"var(--text)", marginBottom:14,
-        }}>NO ACTIVE DUEL</h2>
-        <p style={{ fontFamily:"'Barlow',sans-serif", fontSize:15, color:"var(--muted)", marginBottom:28 }}>
-          You're not currently in a duel. Join the queue to get matched.
+        <div style={{ fontSize:56, marginBottom:16, opacity:0.3 }}>⚔️</div>
+        <h2 style={{ fontFamily:"'Russo One',sans-serif", fontSize:24, letterSpacing:"0.08em", color:"var(--text)", marginBottom:12 }}>
+          NO ACTIVE DUEL
+        </h2>
+        <p style={{ fontFamily:"'Barlow',sans-serif", fontSize:14, color:"var(--muted)", marginBottom:24 }}>
+          You're not currently in a duel.
         </p>
-        <div style={{ display:"flex", gap:14, flexWrap:"wrap", justifyContent:"center" }}>
+        <div style={{ display:"flex", gap:12, flexWrap:"wrap", justifyContent:"center" }}>
           <button onClick={() => navigate("queue")} className="btn-gold">GO TO QUEUE</button>
           <button onClick={() => navigate("home")}  className="btn-outline">HOME</button>
         </div>
@@ -199,45 +199,33 @@ export default function Duel({ navigate }) {
     );
   }
 
-  // ── Loading ────────────────────────────────────────────────────────────
   if (!duel) {
     return (
       <div className="page" style={{
-        minHeight:"100vh",
-        display:"flex", alignItems:"center", justifyContent:"center",
+        minHeight:"100vh", display:"flex", alignItems:"center", justifyContent:"center",
       }}>
         <div style={{ textAlign:"center" }}>
-          <div style={{
-            width:48, height:48, borderRadius:"50%",
-            border:"3px solid rgba(255,184,0,0.2)",
-            borderTopColor:"var(--gold)",
-            animation:"led-breathe 0.8s linear infinite",
-            margin:"0 auto 16px",
-          }}/>
-          <p className="label" style={{ color:"var(--muted)" }}>LOADING DUEL...</p>
+          <div style={{ width:40,height:40,borderRadius:"50%",border:"3px solid rgba(255,184,0,0.2)",borderTopColor:"var(--gold)",animation:"led-breathe 0.8s linear infinite",margin:"0 auto 14px" }}/>
+          <p className="label" style={{ color:"var(--muted)" }}>LOADING...</p>
         </div>
       </div>
     );
   }
 
   // ── OUTCOME REVEAL ─────────────────────────────────────────────────────
-  if (isComplete && revealed) {
-    const outcome    = duel.outcome;
-    const isSplit    = outcome === "BOTH_SPLIT";
-    const isBothSteal= outcome === "BOTH_STEAL";
-    const isBetrayal = !isSplit && !isBothSteal;
-    const iWon       = (amP1 && outcome === "P1_STEAL") || (amP2 && outcome === "P2_STEAL") || isSplit;
-    const iBetrayed  = (amP1 && outcome === "P2_STEAL") || (amP2 && outcome === "P1_STEAL");
+  if (isComplete) {
+    const outcome     = duel.outcome;
+    const isSplit     = outcome === "BOTH_SPLIT";
+    const isBothSteal = outcome === "BOTH_STEAL";
+    const iWon = (amP1 && outcome==="P1_STEAL") || (amP2 && outcome==="P2_STEAL") || isSplit;
+    const iBetrayed = (amP1 && outcome==="P2_STEAL") || (amP2 && outcome==="P1_STEAL");
 
     return (
       <div className="page" style={{
-        minHeight:"100vh",
-        display:"flex", flexDirection:"column",
+        minHeight:"100vh", display:"flex", flexDirection:"column",
         alignItems:"center", justifyContent:"center",
-        padding:"100px 24px 60px",
-        textAlign:"center",
+        padding:"100px 20px 60px", textAlign:"center",
       }}>
-        {/* Glow background */}
         <div style={{
           position:"fixed", inset:0, pointerEvents:"none",
           background: isSplit
@@ -247,84 +235,62 @@ export default function Duel({ navigate }) {
             : "radial-gradient(ellipse at 50% 40%, rgba(204,32,32,0.15) 0%, transparent 65%)",
         }}/>
 
-        <div style={{ position:"relative", zIndex:2, maxWidth:560 }}>
-
-          {/* Reveal icon */}
-          <div style={{ fontSize:72, marginBottom:20, animation:"winner-burst 0.8s ease" }}>
+        <div style={{ position:"relative", zIndex:2, maxWidth:520, width:"100%" }}>
+          <div style={{ fontSize:64, marginBottom:16, animation:"winner-burst 0.8s ease" }}>
             {isSplit ? "🤝" : isBothSteal ? "💀" : "🗡️"}
           </div>
-
-          {/* Outcome label */}
           <h2 style={{
             fontFamily:"'Russo One',sans-serif",
-            fontSize:"clamp(28px,6vw,52px)",
-            letterSpacing:"0.1em",
+            fontSize:"clamp(28px,6vw,48px)", letterSpacing:"0.1em",
             color: isSplit ? "var(--green)" : isBothSteal ? "#90A4AE" : "var(--red2)",
-            marginBottom:8,
-            animation:"reveal-flip 0.8s ease 0.3s both",
+            marginBottom:8, animation:"reveal-flip 0.8s ease 0.3s both",
           }}>
             {isSplit ? "BOTH SPLIT" : isBothSteal ? "BOTH STOLE" : "BETRAYAL"}
           </h2>
 
-          {/* Personal outcome */}
           <p style={{
             fontFamily:"'Oswald',sans-serif",
-            fontSize:18, fontWeight:600, letterSpacing:2,
+            fontSize:16, fontWeight:600, letterSpacing:2, marginBottom:28,
             color: iWon ? "var(--gold)" : iBetrayed ? "var(--red2)" : "var(--dim)",
-            marginBottom:28,
           }}>
-            {isSplit    ? `YOU WON ◎ ${fmtSOL((duel.amount||0)/2)}` :
-             iWon       ? `YOU WON ◎ ${fmtSOL(duel.amount)}` :
-             iBetrayed  ? "YOU WERE BETRAYED" :
-             isBothSteal ? "NOBODY WINS" : ""}
+            {isSplit     ? `YOU WON ◎ ${fmtSOL((duel.amount||0)/2)}` :
+             iWon        ? `YOU WON ◎ ${fmtSOL(duel.amount)}` :
+             iBetrayed   ? "YOU WERE BETRAYED" :
+             isBothSteal ? "NOBODY WINS — POT CARRIES OVER" : ""}
           </p>
 
-          {/* Orb reveals */}
-          <div style={{
-            display:"flex", gap:40, justifyContent:"center",
-            marginBottom:36,
-          }}>
+          <div style={{ display:"flex", gap:32, justifyContent:"center", marginBottom:32 }}>
             <div style={{ textAlign:"center" }}>
-              <div className="label" style={{ marginBottom:12, color:"var(--muted)" }}>
+              <div className="label" style={{ marginBottom:10, color:"var(--muted)" }}>
                 {duel.player1Username || short(duel.player1)}
               </div>
               <div style={{ animation:"reveal-flip 0.7s ease 0.5s both" }}>
-                <Orb type={duel.vote1} size={120} animated={false}/>
+                <Orb type={duel.vote1} size={110} animated={false}/>
               </div>
             </div>
             <div style={{ textAlign:"center" }}>
-              <div className="label" style={{ marginBottom:12, color:"var(--muted)" }}>
+              <div className="label" style={{ marginBottom:10, color:"var(--muted)" }}>
                 {duel.player2Username || short(duel.player2)}
               </div>
               <div style={{ animation:"reveal-flip 0.7s ease 0.7s both" }}>
-                <Orb type={duel.vote2} size={120} animated={false}/>
+                <Orb type={duel.vote2} size={110} animated={false}/>
               </div>
             </div>
           </div>
 
-          {/* TX link */}
           {duel.txSig && (
             <div style={{ marginBottom:24 }}>
               <a href={`https://solscan.io/tx/${duel.txSig.split("|")[0]}`}
                 target="_blank" rel="noreferrer"
-                style={{
-                  fontFamily:"'Oswald',sans-serif",
-                  fontSize:11, letterSpacing:3,
-                  color:"var(--gold)", textDecoration:"underline",
-                }}>
+                style={{ fontFamily:"'Oswald',sans-serif", fontSize:11, letterSpacing:3, color:"var(--gold)", textDecoration:"underline" }}>
                 VIEW ON SOLSCAN ↗
               </a>
             </div>
           )}
 
-          {/* Actions */}
-          <div style={{ display:"flex", gap:14, justifyContent:"center", flexWrap:"wrap" }}>
-            <button onClick={() => navigate("queue")} className="btn-gold">
-              PLAY AGAIN
-            </button>
-            <button onClick={() => navigate("home")} className="btn-outline">
-              SEE HISTORY
-            </button>
+          <div style={{ display:"flex", gap:12, justifyContent:"center", flexWrap:"wrap" }}>
+            <button onClick={() => navigate("queue")} className="btn-gold">PLAY AGAIN</button>
+            <button onClick={() => navigate("home")}  className="btn-outline">SEE HISTORY</button>
           </div>
         </div>
       </div>
@@ -332,177 +298,131 @@ export default function Duel({ navigate }) {
   }
 
   // ── ACTIVE DUEL ROOM ───────────────────────────────────────────────────
+  const chatEnabled = chatReady || (queueEntry?.status === "in_duel");
+
   return (
     <div className="page" style={{
-      padding:"80px 16px 60px",
-      minHeight:"100vh",
+      padding:"80px 16px 60px", minHeight:"100vh",
       display:"flex", flexDirection:"column",
     }}>
-      <div style={{ maxWidth:900, margin:"0 auto", width:"100%", flex:1, display:"flex", flexDirection:"column" }}>
+      <div style={{ maxWidth:860, margin:"0 auto", width:"100%", flex:1, display:"flex", flexDirection:"column" }}>
 
-        {/* ── DUEL HEADER ────────────────────────────────────── */}
+        {/* ── DUEL HEADER ──────────────────────────────────────────── */}
         <div style={{
           display:"flex", alignItems:"center",
-          justifyContent:"space-between", gap:16,
-          marginBottom:24, flexWrap:"wrap",
+          justifyContent:"space-between", gap:12,
+          marginBottom:20, flexWrap:"wrap",
         }}>
-          {/* Player 1 */}
+          {/* P1 */}
           <div style={{
-            flex:1, minWidth:120,
-            padding:"14px 18px",
+            flex:1, minWidth:100,
+            padding:"12px 16px",
             background: amP1 ? "rgba(255,184,0,0.08)" : "var(--card)",
             border:`1px solid ${amP1 ? "rgba(255,184,0,0.3)" : "var(--border)"}`,
             borderRadius:12, textAlign:"center",
           }}>
-            <div className="label" style={{ marginBottom:6, color:"var(--muted)", fontSize:8 }}>PLAYER 1</div>
-            <div style={{
-              fontFamily:"'Oswald',sans-serif",
-              fontSize:15, fontWeight:700,
-              color: amP1 ? "var(--gold)" : "var(--text)",
-            }}>
+            <div className="label" style={{ marginBottom:5, color:"var(--muted)", fontSize:8 }}>P1</div>
+            <div style={{ fontFamily:"'Oswald',sans-serif", fontSize:14, fontWeight:700, color: amP1 ? "var(--gold)" : "var(--text)", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
               {duel.player1Username || short(duel.player1)}
               {amP1 && <span style={{ fontSize:9, color:"var(--muted)", marginLeft:6 }}>(you)</span>}
             </div>
-            {/* Has voted indicator */}
-            {duel.hasVoted1 && (
-              <div style={{ marginTop:6, fontSize:10, color:"var(--green)", letterSpacing:2, fontFamily:"'Oswald',sans-serif" }}>
-                ● VOTED
-              </div>
-            )}
+            {duel.hasVoted1 && <div style={{ fontSize:9, color:"var(--green)", letterSpacing:2, marginTop:4, fontFamily:"'Oswald',sans-serif" }}>● VOTED</div>}
           </div>
 
-          {/* Center: timer + pot */}
+          {/* Timer + pot + phase */}
           <div style={{ textAlign:"center", flexShrink:0 }}>
-            <SmallRing seconds={secondsLeft} total={5 * 60}/>
+            <PhaseRing
+              seconds={secondsLeft}
+              totalSeconds={isChatPhase ? chatTotalSec : voteTotalSec}
+              phase={phase}/>
+            <div style={{ fontFamily:"'Russo One',sans-serif", fontSize:16, color:"var(--gold)", marginTop:6 }}>
+              ◎ {fmtSOL(duel.amount)}
+            </div>
             <div style={{
-              marginTop:8,
-              fontFamily:"'Russo One',sans-serif",
-              fontSize:18, color:"var(--gold)",
-            }}>◎ {fmtSOL(duel.amount)}</div>
-            <div className="label" style={{ color:"var(--dim)", fontSize:8 }}>AT STAKE</div>
+              fontFamily:"'Oswald',sans-serif", fontSize:9, letterSpacing:3,
+              color: isVotePhase ? "var(--red2)" : "var(--gold)", marginTop:3,
+            }}>
+              {isChatPhase ? "CHAT PHASE" : "VOTE PHASE"}
+            </div>
           </div>
 
-          {/* Player 2 */}
+          {/* P2 */}
           <div style={{
-            flex:1, minWidth:120,
-            padding:"14px 18px",
+            flex:1, minWidth:100,
+            padding:"12px 16px",
             background: amP2 ? "rgba(255,184,0,0.08)" : "var(--card)",
             border:`1px solid ${amP2 ? "rgba(255,184,0,0.3)" : "var(--border)"}`,
             borderRadius:12, textAlign:"center",
           }}>
-            <div className="label" style={{ marginBottom:6, color:"var(--muted)", fontSize:8 }}>PLAYER 2</div>
-            <div style={{
-              fontFamily:"'Oswald',sans-serif",
-              fontSize:15, fontWeight:700,
-              color: amP2 ? "var(--gold)" : "var(--text)",
-            }}>
+            <div className="label" style={{ marginBottom:5, color:"var(--muted)", fontSize:8 }}>P2</div>
+            <div style={{ fontFamily:"'Oswald',sans-serif", fontSize:14, fontWeight:700, color: amP2 ? "var(--gold)" : "var(--text)", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
               {duel.player2Username || short(duel.player2)}
               {amP2 && <span style={{ fontSize:9, color:"var(--muted)", marginLeft:6 }}>(you)</span>}
             </div>
-            {duel.hasVoted2 && (
-              <div style={{ marginTop:6, fontSize:10, color:"var(--green)", letterSpacing:2, fontFamily:"'Oswald',sans-serif" }}>
-                ● VOTED
-              </div>
-            )}
+            {duel.hasVoted2 && <div style={{ fontSize:9, color:"var(--green)", letterSpacing:2, marginTop:4, fontFamily:"'Oswald',sans-serif" }}>● VOTED</div>}
           </div>
         </div>
 
-        {/* ── CHAT + VOTE AREA ────────────────────────────────── */}
-        {!chatOpen ? (
-          /* Ready button — unlocks chat */
+        {/* ── READY GATE (if not yet clicked ready) ─────────────────── */}
+        {!chatEnabled && !isVotePhase && (
           <div style={{
-            flex:1,
-            display:"flex", flexDirection:"column",
+            flex:1, display:"flex", flexDirection:"column",
             alignItems:"center", justifyContent:"center",
             gap:20, textAlign:"center",
           }}>
-            <div style={{ fontSize:48 }}>🔒</div>
-            <h3 style={{
-              fontFamily:"'Russo One',sans-serif",
-              fontSize:24, letterSpacing:"0.06em", color:"var(--text)",
-            }}>READY TO ENTER?</h3>
-            <p style={{
-              fontFamily:"'Barlow',sans-serif",
-              fontSize:14, color:"var(--muted)",
-              maxWidth:360, lineHeight:1.7,
-            }}>
-              Clicking READY opens the chat room and starts your 5-minute negotiation.
-              Once you enter, the clock runs whether you vote or not.
+            <div style={{ fontSize:44 }}>🔓</div>
+            <h3 style={{ fontFamily:"'Russo One',sans-serif", fontSize:22, letterSpacing:"0.06em", color:"var(--text)" }}>
+              ENTER THE ROOM
+            </h3>
+            <p style={{ fontFamily:"'Barlow',sans-serif", fontSize:14, color:"var(--muted)", maxWidth:320, lineHeight:1.7 }}>
+              Click to unlock the chat. If your opponent hasn't entered yet, say something — they'll see it when they arrive.
             </p>
-            <button onClick={() => setChatOpen(true)} className="btn-gold"
-              style={{ fontSize:16, padding:"16px 52px" }}>
-              I'M READY ⚔️
+            <button onClick={() => setChatReady(true)} className="btn-gold"
+              style={{ fontSize:16, padding:"15px 48px" }}>
+              ENTER ⚔️
             </button>
           </div>
-        ) : (
-          <div style={{ flex:1, display:"flex", flexDirection:"column", gap:16 }}>
+        )}
+
+        {/* ── CHAT + VOTE ───────────────────────────────────────────── */}
+        {(chatEnabled || isVotePhase) && (
+          <div style={{ flex:1, display:"flex", flexDirection:"column", gap:14 }}>
 
             {/* Chat window */}
             <div style={{
-              flex:1, minHeight:260, maxHeight:360,
-              background:"rgba(0,0,0,0.25)",
+              flex:1, minHeight:220, maxHeight:320,
+              background:"rgba(0,0,0,0.22)",
               border:"1px solid var(--border)",
-              borderRadius:12,
-              display:"flex", flexDirection:"column",
-              overflow:"hidden",
+              borderRadius:12, display:"flex", flexDirection:"column", overflow:"hidden",
             }}>
-              {/* Chat header */}
               <div style={{
-                padding:"10px 16px",
-                borderBottom:"1px solid var(--border)",
+                padding:"8px 14px", borderBottom:"1px solid var(--border)",
                 display:"flex", alignItems:"center", gap:8,
               }}>
-                <div style={{ width:6, height:6, borderRadius:"50%", background:"var(--green)", boxShadow:"0 0 6px var(--green)" }}/>
-                <span className="label" style={{ fontSize:9, color:"var(--muted)" }}>
-                  PRIVATE CHAT — ONLY YOU AND {oppUsername?.toUpperCase() || "OPPONENT"} CAN SEE THIS
+                <div style={{ width:6,height:6,borderRadius:"50%",background:"var(--green)",boxShadow:"0 0 6px var(--green)" }}/>
+                <span className="label" style={{ fontSize:8, color:"var(--muted)" }}>
+                  PRIVATE CHAT — {isChatPhase ? "NEGOTIATE" : "CHAT CLOSED — VOTE NOW"}
                 </span>
               </div>
 
-              {/* Messages */}
-              <div style={{
-                flex:1, overflowY:"auto",
-                padding:"14px 16px",
-                display:"flex", flexDirection:"column", gap:10,
-              }}>
+              <div style={{ flex:1, overflowY:"auto", padding:"12px 14px", display:"flex", flexDirection:"column", gap:8 }}>
                 {messages.length === 0 && (
-                  <p style={{
-                    textAlign:"center", color:"var(--dim)",
-                    fontFamily:"'Barlow',sans-serif",
-                    fontSize:13, fontStyle:"italic",
-                    margin:"auto",
-                  }}>
-                    The room is open. Say something — or don't.
+                  <p style={{ textAlign:"center", color:"var(--dim)", fontFamily:"'Barlow',sans-serif", fontSize:13, fontStyle:"italic", margin:"auto" }}>
+                    The room is open.
                   </p>
                 )}
                 {messages.map(m => {
                   const isMe = m.uid === user?.uid;
                   return (
-                    <div key={m.id} style={{
-                      display:"flex",
-                      justifyContent: isMe ? "flex-end" : "flex-start",
-                      animation:"chat-in 0.3s ease",
-                    }}>
+                    <div key={m.id} style={{ display:"flex", justifyContent: isMe ? "flex-end" : "flex-start", animation:"chat-in 0.3s ease" }}>
                       <div style={{
-                        maxWidth:"75%",
-                        padding:"10px 14px",
+                        maxWidth:"76%", padding:"9px 13px",
                         borderRadius: isMe ? "12px 12px 4px 12px" : "12px 12px 12px 4px",
-                        background: isMe
-                          ? "rgba(255,184,0,0.12)"
-                          : "rgba(255,255,255,0.06)",
-                        border:`1px solid ${isMe ? "rgba(255,184,0,0.2)" : "rgba(255,255,255,0.06)"}`,
+                        background: isMe ? "rgba(255,184,0,0.1)" : "rgba(255,255,255,0.05)",
+                        border:`1px solid ${isMe ? "rgba(255,184,0,0.18)" : "rgba(255,255,255,0.05)"}`,
                       }}>
-                        {!isMe && (
-                          <div style={{
-                            fontFamily:"'Oswald',sans-serif",
-                            fontSize:10, fontWeight:600, letterSpacing:1,
-                            color:"var(--gold)", marginBottom:4,
-                          }}>{m.username}</div>
-                        )}
-                        <p style={{
-                          fontFamily:"'Barlow',sans-serif",
-                          fontSize:14, color:"var(--text)", lineHeight:1.5,
-                          wordBreak:"break-word",
-                        }}>{m.text}</p>
+                        {!isMe && <div style={{ fontFamily:"'Oswald',sans-serif", fontSize:10, fontWeight:600, letterSpacing:1, color:"var(--gold)", marginBottom:3 }}>{m.username}</div>}
+                        <p style={{ fontFamily:"'Barlow',sans-serif", fontSize:14, color:"var(--text)", lineHeight:1.5, margin:0, wordBreak:"break-word" }}>{m.text}</p>
                       </div>
                     </div>
                   );
@@ -510,117 +430,89 @@ export default function Duel({ navigate }) {
                 <div ref={chatEndRef}/>
               </div>
 
-              {/* Chat input */}
-              <form onSubmit={sendMessage} style={{
-                display:"flex", gap:8, padding:"10px 12px",
-                borderTop:"1px solid var(--border)",
-              }}>
-                <input
-                  className="input-field"
-                  placeholder="Say something..."
-                  value={chatInput}
-                  onChange={e => setChatInput(e.target.value)}
-                  maxLength={200}
-                  style={{ flex:1, padding:"10px 14px", fontSize:14 }}
-                />
-                <button type="submit" style={{
-                  background:"var(--goldDim)",
-                  border:"1px solid var(--goldBorder)",
-                  borderRadius:8,
-                  color:"var(--gold)",
-                  cursor:"pointer",
-                  fontFamily:"'Oswald',sans-serif",
-                  fontSize:13, fontWeight:600, letterSpacing:1,
-                  padding:"10px 18px",
-                  flexShrink:0,
-                  transition:"background 0.2s",
-                }}>SEND</button>
-              </form>
-            </div>
-
-            {/* Vote section */}
-            <div style={{
-              padding:"24px",
-              background:"var(--card)",
-              border:"1px solid var(--border)",
-              borderRadius:12,
-            }}>
-              {!voteSubmitted ? (
-                <>
-                  <div className="label" style={{ textAlign:"center", marginBottom:20, color:"var(--muted)" }}>
-                    YOUR VOTE IS PRIVATE — CHOOSE CAREFULLY
-                  </div>
-                  <div style={{
-                    display:"flex", justifyContent:"center",
-                    gap:"clamp(20px,5vw,60px)",
-                    flexWrap:"wrap",
-                  }}>
-                    <div style={{ textAlign:"center", cursor:"pointer" }} onClick={() => submitVote("SPLIT")}>
-                      <Orb type="SPLIT" size={120} animated={false}
-                        selected={myVote==="SPLIT"} onClick={() => submitVote("SPLIT")}/>
-                      <p style={{
-                        marginTop:12, fontFamily:"'Oswald',sans-serif",
-                        fontSize:12, fontWeight:600, letterSpacing:3,
-                        color:"var(--gold)",
-                      }}>SPLIT — SHARE EQUALLY</p>
-                    </div>
-                    <div style={{ textAlign:"center" }}>
-                      <span style={{
-                        fontFamily:"'Russo One',sans-serif",
-                        fontSize:20, color:"var(--dim)", letterSpacing:3,
-                        display:"block", marginTop:40,
-                      }}>VS</span>
-                    </div>
-                    <div style={{ textAlign:"center" }}>
-                      <Orb type="STEAL" size={120} animated={false}
-                        selected={myVote==="STEAL"} onClick={() => submitVote("STEAL")}/>
-                      <p style={{
-                        marginTop:12, fontFamily:"'Oswald',sans-serif",
-                        fontSize:12, fontWeight:600, letterSpacing:3,
-                        color:"var(--red2)",
-                      }}>STEAL — TAKE IT ALL</p>
-                    </div>
-                  </div>
-                  <p style={{
-                    textAlign:"center", marginTop:16,
-                    fontSize:12, color:"var(--dim)", fontFamily:"'Barlow',sans-serif",
-                  }}>
-                    Your vote is sealed the moment you click. Your opponent cannot see it until the timer ends.
-                  </p>
-                </>
-              ) : (
-                <div style={{ textAlign:"center", padding:"20px" }}>
-                  <div style={{ fontSize:36, marginBottom:12 }}>
-                    {myVote === "SPLIT" ? "🤝" : "🗡️"}
-                  </div>
-                  <div style={{
-                    fontFamily:"'Russo One',sans-serif",
-                    fontSize:20, letterSpacing:2,
-                    color: myVote === "SPLIT" ? "var(--gold)" : "var(--red2)",
-                    marginBottom:8,
-                  }}>
-                    VOTE LOCKED — {myVote}
-                  </div>
-                  <p style={{
-                    fontFamily:"'Barlow',sans-serif",
-                    fontSize:13, color:"var(--muted)",
-                  }}>
-                    Waiting for your opponent and the timer to expire.
-                    The reveal happens simultaneously.
-                  </p>
-                  {/* Opponent voted indicator */}
-                  {((amP1 && duel.hasVoted2) || (amP2 && duel.hasVoted1)) && (
-                    <div style={{
-                      marginTop:14,
-                      fontFamily:"'Oswald',sans-serif",
-                      fontSize:12, letterSpacing:2, color:"var(--green)",
-                    }}>
-                      ● OPPONENT HAS VOTED
-                    </div>
-                  )}
-                </div>
+              {/* Chat input — disabled in vote phase */}
+              {isChatPhase && (
+                <form onSubmit={sendMessage} style={{ display:"flex", gap:8, padding:"8px 10px", borderTop:"1px solid var(--border)" }}>
+                  <input
+                    className="input-field"
+                    placeholder="Say something..."
+                    value={chatInput}
+                    onChange={e => setChatInput(e.target.value)}
+                    maxLength={200}
+                    style={{ flex:1, padding:"9px 13px", fontSize:14 }}/>
+                  <button type="submit" style={{
+                    background:"var(--goldDim)", border:"1px solid var(--goldBorder)",
+                    borderRadius:8, color:"var(--gold)", cursor:"pointer",
+                    fontFamily:"'Oswald',sans-serif", fontSize:12, fontWeight:600, letterSpacing:1,
+                    padding:"9px 16px", flexShrink:0,
+                  }}>SEND</button>
+                </form>
               )}
             </div>
+
+            {/* Vote section — only shows in vote phase */}
+            {isVotePhase && (
+              <div style={{
+                padding:"20px", background:"var(--card)",
+                border:"1px solid var(--border)", borderRadius:12,
+              }}>
+                {!voteSubmitted ? (
+                  <>
+                    <div className="label" style={{ textAlign:"center", marginBottom:18, color:"var(--muted)" }}>
+                      VOTE NOW — YOUR CHOICE IS SEALED IMMEDIATELY
+                    </div>
+                    <div style={{ display:"flex", justifyContent:"center", gap:"clamp(16px,5vw,52px)", flexWrap:"wrap" }}>
+                      <div style={{ textAlign:"center" }}>
+                        <Orb type="SPLIT" size={110} animated={false} onClick={() => submitVote("SPLIT")} selected={myVote==="SPLIT"}/>
+                        <p style={{ marginTop:10, fontFamily:"'Oswald',sans-serif", fontSize:11, fontWeight:600, letterSpacing:3, color:"var(--gold)" }}>SHARE EQUALLY</p>
+                      </div>
+                      <div style={{ display:"flex", alignItems:"center" }}>
+                        <span style={{ fontFamily:"'Russo One',sans-serif", fontSize:18, color:"var(--dim)", letterSpacing:3 }}>VS</span>
+                      </div>
+                      <div style={{ textAlign:"center" }}>
+                        <Orb type="STEAL" size={110} animated={false} onClick={() => submitVote("STEAL")} selected={myVote==="STEAL"}/>
+                        <p style={{ marginTop:10, fontFamily:"'Oswald',sans-serif", fontSize:11, fontWeight:600, letterSpacing:3, color:"var(--red2)" }}>TAKE IT ALL</p>
+                      </div>
+                    </div>
+                    <p style={{ textAlign:"center", marginTop:14, fontSize:11, color:"var(--dim)", fontFamily:"'Barlow',sans-serif" }}>
+                      Your vote is hidden from your opponent until both have voted or time runs out.
+                    </p>
+                  </>
+                ) : (
+                  <div style={{ textAlign:"center", padding:"16px" }}>
+                    <div style={{ fontSize:32, marginBottom:10 }}>{myVote==="SPLIT" ? "🤝" : "🗡️"}</div>
+                    <div style={{ fontFamily:"'Russo One',sans-serif", fontSize:18, letterSpacing:2, color: myVote==="SPLIT" ? "var(--gold)" : "var(--red2)", marginBottom:8 }}>
+                      VOTE LOCKED — {myVote}
+                    </div>
+                    <p style={{ fontFamily:"'Barlow',sans-serif", fontSize:13, color:"var(--muted)" }}>
+                      Waiting for the timer to expire and reveal.
+                    </p>
+                    {((amP1 && duel.hasVoted2) || (amP2 && duel.hasVoted1)) && (
+                      <div style={{ marginTop:10, fontFamily:"'Oswald',sans-serif", fontSize:11, letterSpacing:2, color:"var(--green)" }}>
+                        ● OPPONENT HAS VOTED
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Chat phase — show vote is coming notice */}
+            {isChatPhase && (
+              <div style={{
+                padding:"12px 16px",
+                background:"rgba(204,32,32,0.06)",
+                border:"1px solid rgba(204,32,32,0.15)",
+                borderRadius:8,
+                textAlign:"center",
+              }}>
+                <p style={{ fontFamily:"'Barlow',sans-serif", fontSize:12, color:"var(--muted)", margin:0 }}>
+                  Chat closes in{" "}
+                  <span style={{ color:"var(--red2)", fontWeight:600 }}>{Math.floor(secondsLeft/60)}:{String(secondsLeft%60).padStart(2,"0")}</span>
+                  {" "}— then you'll have 2 minutes to vote SPLIT or STEAL.
+                </p>
+              </div>
+            )}
           </div>
         )}
       </div>

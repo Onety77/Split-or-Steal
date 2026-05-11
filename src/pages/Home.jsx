@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import {
-  collection, query, orderBy, limit, onSnapshot, doc,
+  collection, query, orderBy, limit, onSnapshot, doc, where,
 } from "firebase/firestore";
 import { db } from "../firebase";
 import Orb from "../components/Orb";
@@ -196,6 +196,7 @@ export default function Home({ navigate }) {
   const [countdown, setCountdown] = useState(DUEL_INTERVAL);
   const [copiedCA,    setCopiedCA]    = useState(false);
   const [showHowModal,setShowHowModal]= useState(false);
+  const [liveChat,   setLiveChat]    = useState([]);
   const nextDuelRef = useRef(null);
 
   useEffect(() => {
@@ -220,6 +221,19 @@ export default function Home({ navigate }) {
       }
     });
   }, []);
+
+  // Live spectator chat — listens to active duel chat
+  useEffect(() => {
+    if (!activeDuel?.duelId) { setLiveChat([]); return; }
+    const q = query(
+      collection(db, "sos_duels", activeDuel.duelId, "chat"),
+      orderBy("timestamp","asc"),
+      limit(30)
+    );
+    return onSnapshot(q, snap =>
+      setLiveChat(snap.docs.map(d => ({ id:d.id,...d.data() })))
+    );
+  }, [activeDuel?.duelId]);
 
   useEffect(() => {
     const id = setInterval(() => {
@@ -471,6 +485,47 @@ export default function Home({ navigate }) {
               ◎ {fmtSOL(activeDuel.amount)}
               <span style={{ color:"var(--muted)", fontSize:11, marginLeft:8 }}>at stake</span>
             </div>
+
+            {/* Phase badge */}
+            <div style={{ textAlign:"center" }}>
+              <span style={{
+                display:"inline-block", padding:"4px 14px", borderRadius:20,
+                fontFamily:"'Oswald',sans-serif", fontSize:9, fontWeight:600, letterSpacing:3,
+                background: activeDuel.phase==="vote" ? "rgba(204,32,32,0.12)" : "rgba(255,184,0,0.1)",
+                color:      activeDuel.phase==="vote" ? "var(--red2)" : "var(--gold)",
+                border:     activeDuel.phase==="vote" ? "1px solid rgba(204,32,32,0.3)" : "1px solid rgba(255,184,0,0.25)",
+              }}>
+                {activeDuel.phase==="vote" ? "VOTE PHASE" : "CHAT PHASE"}
+              </span>
+            </div>
+
+            {/* Spectator live chat */}
+            {liveChat.length > 0 && (
+              <div style={{
+                marginTop:8,
+                background:"rgba(0,0,0,0.2)",
+                border:"1px solid var(--border)",
+                borderRadius:10, overflow:"hidden",
+              }}>
+                <div style={{ padding:"6px 12px", borderBottom:"1px solid var(--border)", display:"flex", alignItems:"center", gap:7 }}>
+                  <div style={{ width:5,height:5,borderRadius:"50%",background:"var(--green)",boxShadow:"0 0 5px var(--green)" }}/>
+                  <span style={{ fontFamily:"'Oswald',sans-serif",fontSize:8,letterSpacing:3,color:"var(--muted)" }}>LIVE CHAT — SPECTATOR VIEW</span>
+                </div>
+                <div style={{ maxHeight:140,overflowY:"auto",padding:"10px 12px",display:"flex",flexDirection:"column",gap:6 }}>
+                  {liveChat.map(m => (
+                    <div key={m.id} style={{ animation:"chat-in 0.3s ease" }}>
+                      <span style={{ fontFamily:"'Oswald',sans-serif",fontSize:10,fontWeight:600,color:"var(--gold)",letterSpacing:1,marginRight:8 }}>{m.username}</span>
+                      <span style={{ fontFamily:"'Barlow',sans-serif",fontSize:13,color:"var(--muted)" }}>{m.text}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {liveChat.length === 0 && activeDuel.phase === "chat" && (
+              <p style={{ textAlign:"center",fontSize:12,color:"var(--dim)",fontFamily:"'Barlow',sans-serif",fontStyle:"italic",margin:0 }}>
+                Waiting for players to start chatting...
+              </p>
+            )}
           </div>
         ) : (
           <div className="card" style={{ textAlign:"center", padding: isMobile ? "32px 16px" : "44px" }}>
