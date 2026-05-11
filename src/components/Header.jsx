@@ -31,13 +31,8 @@ export default function Header({ navigate, currentPage }) {
         if (rem > 0) {
           setCountdown(rem);
         } else {
-          // Deadline passed — engine is mid-round. Keep ticking past zero
-          // so the countdown does not freeze. Reset every 10 min locally.
           setCountdown(p => {
-            if (p <= 1000) {
-              nextDuelRef.current = null;
-              return DUEL_INTERVAL;
-            }
+            if (p <= 1000) { nextDuelRef.current = null; return DUEL_INTERVAL; }
             return p - 1000;
           });
         }
@@ -54,9 +49,10 @@ export default function Header({ navigate, currentPage }) {
   const urgent = countdown < 60000 && !activeDuel;
 
   const navLinks = [
-    { label:"HOME",  page:"home"  },
-    { label:"QUEUE", page:"queue" },
-    { label:"ABOUT", page:"about" },
+    { label:"HOME",        page:"home"        },
+    { label:"QUEUE",       page:"queue"       },
+    { label:"LEADERBOARD", page:"leaderboard" },
+    { label:"ABOUT",       page:"about"       },
   ];
 
   const handleSignOut = async () => {
@@ -68,15 +64,13 @@ export default function Header({ navigate, currentPage }) {
     setMenuOpen(false);
   };
 
-  // Countdown pill — shared between mobile and desktop
   const CountdownPill = () => (
     <button onClick={() => { navigate("home"); setMenuOpen(false); }} style={{
       display:"flex", alignItems:"center", gap:7,
       padding:"6px 12px",
       background: activeDuel ? "rgba(255,184,0,0.12)" : urgent ? "rgba(204,32,32,0.12)" : "rgba(255,255,255,0.04)",
       border:"1px solid " + (activeDuel ? "rgba(255,184,0,0.35)" : urgent ? "rgba(204,32,32,0.35)" : "rgba(255,255,255,0.08)"),
-      borderRadius:30, cursor:"pointer", flexShrink:0,
-      transition:"all 0.3s",
+      borderRadius:30, cursor:"pointer", flexShrink:0, transition:"all 0.3s",
     }}>
       <div style={{
         width:6, height:6, borderRadius:"50%", flexShrink:0,
@@ -115,12 +109,12 @@ export default function Header({ navigate, currentPage }) {
         </div>
       </button>
 
-      {/* Desktop nav — hidden on mobile */}
-      <nav style={{ display:"flex", alignItems:"center", gap:24, flex:1, justifyContent:"center" }} className="hide-mobile">
+      {/* Desktop nav */}
+      <nav style={{ display:"flex", alignItems:"center", gap:20, flex:1, justifyContent:"center" }} className="hide-mobile">
         {navLinks.map(({ label, page }) => (
           <button key={page} onClick={() => navigate(page)} style={{
             background:"none", border:"none", cursor:"pointer",
-            fontFamily:"'Oswald',sans-serif", fontSize:12, fontWeight:600, letterSpacing:3,
+            fontFamily:"'Oswald',sans-serif", fontSize:11, fontWeight:600, letterSpacing:2,
             color: currentPage===page ? "var(--gold)" : "var(--muted)",
             borderBottom: currentPage===page ? "1px solid var(--gold)" : "1px solid transparent",
             paddingBottom:2, transition:"color 0.2s",
@@ -131,20 +125,15 @@ export default function Header({ navigate, currentPage }) {
         ))}
       </nav>
 
-      {/* Right side */}
+      {/* Right */}
       <div style={{ display:"flex", alignItems:"center", gap:10, flexShrink:0 }}>
-
-        {/* Countdown pill — always visible */}
         <CountdownPill/>
 
-        {/* Desktop auth controls — hidden on mobile */}
+        {/* Desktop auth */}
         <div className="hide-mobile" style={{ display:"flex", alignItems:"center", gap:10 }}>
           {user && profile ? (
             <>
-              <button onClick={() => navigate("queue")} style={{
-                background:"none", border:"1px solid var(--border)", borderRadius:8, cursor:"pointer",
-                display:"flex", alignItems:"center", gap:7, padding:"7px 12px",
-              }}>
+              <button onClick={() => navigate("queue")} style={{ background:"none", border:"1px solid var(--border)", borderRadius:8, cursor:"pointer", display:"flex", alignItems:"center", gap:7, padding:"7px 12px" }}>
                 <div style={{ width:6, height:6, borderRadius:"50%", background:"var(--green)", boxShadow:"0 0 6px var(--green)" }}/>
                 <span style={{ fontFamily:"'Oswald',sans-serif", fontSize:12, fontWeight:600, letterSpacing:1, color:"var(--text)" }}>{profile.username}</span>
               </button>
@@ -158,75 +147,33 @@ export default function Header({ navigate, currentPage }) {
           )}
         </div>
 
-        {/* Hamburger — mobile only */}
-        <button
-          onClick={() => setMenuOpen(o => !o)}
-          className="hide-desktop"
-          style={{
-            background: menuOpen ? "rgba(255,184,0,0.1)" : "none",
-            border:"1px solid " + (menuOpen ? "rgba(255,184,0,0.3)" : "var(--border)"),
-            borderRadius:8, cursor:"pointer",
-            padding:"8px 11px", color:"var(--muted)", lineHeight:1,
-            transition:"all 0.2s",
-          }}>
+        {/* Hamburger */}
+        <button onClick={() => setMenuOpen(o => !o)} className="hide-desktop" style={{ background: menuOpen ? "rgba(255,184,0,0.1)" : "none", border:"1px solid " + (menuOpen ? "rgba(255,184,0,0.3)" : "var(--border)"), borderRadius:8, cursor:"pointer", padding:"8px 11px", color:"var(--muted)", lineHeight:1, transition:"all 0.2s" }}>
           <span style={{ fontSize:16 }}>{menuOpen ? "✕" : "☰"}</span>
         </button>
       </div>
 
-      {/* ── MOBILE DROPDOWN — everything inside ── */}
+      {/* Mobile dropdown */}
       {menuOpen && (
-        <div style={{
-          position:"absolute", top:"100%", left:0, right:0,
-          background:"rgba(8,6,4,0.98)",
-          borderBottom:"1px solid var(--border)",
-          backdropFilter:"blur(20px)", WebkitBackdropFilter:"blur(20px)",
-          animation:"slide-up 0.2s ease",
-          zIndex:500,
-        }}>
-
-          {/* Nav links */}
+        <div style={{ position:"absolute", top:"100%", left:0, right:0, background:"rgba(8,6,4,0.98)", borderBottom:"1px solid var(--border)", backdropFilter:"blur(20px)", WebkitBackdropFilter:"blur(20px)", animation:"slide-up 0.2s ease", zIndex:500 }}>
           <div style={{ padding:"8px 20px 4px" }}>
             {navLinks.map(({ label, page }) => (
-              <button key={page} onClick={() => { navigate(page); setMenuOpen(false); }} style={{
-                display:"block", width:"100%",
-                background:"none", border:"none", cursor:"pointer",
-                fontFamily:"'Oswald',sans-serif", fontSize:15, fontWeight:600, letterSpacing:3,
-                color: currentPage===page ? "var(--gold)" : "var(--muted)",
-                textAlign:"left", padding:"12px 0",
-                borderBottom:"1px solid var(--border)",
-              }}>{label}</button>
+              <button key={page} onClick={() => { navigate(page); setMenuOpen(false); }} style={{ display:"block", width:"100%", background:"none", border:"none", cursor:"pointer", fontFamily:"'Oswald',sans-serif", fontSize:15, fontWeight:600, letterSpacing:3, color: currentPage===page ? "var(--gold)" : "var(--muted)", textAlign:"left", padding:"12px 0", borderBottom:"1px solid var(--border)" }}>{label}</button>
             ))}
           </div>
-
-          {/* Auth section */}
           <div style={{ padding:"12px 20px 16px" }}>
             {user && profile ? (
               <>
                 <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:14 }}>
                   <div style={{ width:8, height:8, borderRadius:"50%", background:"var(--green)", boxShadow:"0 0 8px var(--green)" }}/>
-                  <span style={{ fontFamily:"'Oswald',sans-serif", fontSize:14, fontWeight:600, letterSpacing:1, color:"var(--text)" }}>
-                    {profile.username}
-                  </span>
-                  <span style={{ fontFamily:"'Share Tech Mono',monospace", fontSize:10, color:"var(--dim)", marginLeft:4 }}>
-                    {profile.wallet ? profile.wallet.slice(0,4) + "..." + profile.wallet.slice(-4) : ""}
-                  </span>
+                  <span style={{ fontFamily:"'Oswald',sans-serif", fontSize:14, fontWeight:600, color:"var(--text)" }}>{profile.username}</span>
+                  <span style={{ fontFamily:"'Share Tech Mono',monospace", fontSize:10, color:"var(--dim)" }}>{profile.wallet ? profile.wallet.slice(0,4)+"..."+profile.wallet.slice(-4) : ""}</span>
                 </div>
-                <button onClick={() => { navigate("queue"); setMenuOpen(false); }} className="btn-gold" style={{ width:"100%", marginBottom:10, fontSize:13 }}>
-                  GO TO QUEUE
-                </button>
-                <button onClick={handleSignOut} style={{
-                  width:"100%", background:"rgba(204,32,32,0.08)",
-                  border:"1px solid rgba(204,32,32,0.2)", borderRadius:8,
-                  cursor:"pointer", fontFamily:"'Oswald',sans-serif",
-                  fontSize:13, fontWeight:600, letterSpacing:2,
-                  color:"var(--red2)", padding:"11px",
-                  transition:"background 0.2s",
-                }}>SIGN OUT</button>
+                <button onClick={() => { navigate("queue"); setMenuOpen(false); }} className="btn-gold" style={{ width:"100%", marginBottom:10, fontSize:13 }}>GO TO QUEUE</button>
+                <button onClick={handleSignOut} style={{ width:"100%", background:"rgba(204,32,32,0.08)", border:"1px solid rgba(204,32,32,0.2)", borderRadius:8, cursor:"pointer", fontFamily:"'Oswald',sans-serif", fontSize:13, fontWeight:600, letterSpacing:2, color:"var(--red2)", padding:"11px" }}>SIGN OUT</button>
               </>
             ) : (
-              <button onClick={() => { navigate("auth"); setMenuOpen(false); }} className="btn-gold" style={{ width:"100%", fontSize:14 }}>
-                SIGN IN / SIGN UP
-              </button>
+              <button onClick={() => { navigate("auth"); setMenuOpen(false); }} className="btn-gold" style={{ width:"100%", fontSize:14 }}>SIGN IN / SIGN UP</button>
             )}
           </div>
         </div>

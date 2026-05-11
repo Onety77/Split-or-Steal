@@ -7,11 +7,12 @@ import Auth              from "./pages/Auth";
 import Queue             from "./pages/Queue";
 import About             from "./pages/About";
 import Duel              from "./pages/Duel";
+import Leaderboard       from "./pages/Leaderboard";
 
 function useRouter() {
   const getPage = () => {
     const p = window.location.pathname.replace("/","") || "home";
-    return ["home","auth","queue","about","duel"].includes(p) ? p : "home";
+    return ["home","auth","queue","about","duel","leaderboard"].includes(p) ? p : "home";
   };
   const [page, setPage] = useState(getPage);
   const navigate = (to) => {
@@ -31,14 +32,14 @@ function AppInner() {
   const { page, navigate } = useRouter();
   return (
     <>
-      {/* Overlay needs navigate so it can send player to duel room */}
       <ReadyCheckOverlay navigate={navigate}/>
       {page !== "duel" && <Header navigate={navigate} currentPage={page}/>}
-      {page === "home"  && <Home  navigate={navigate}/>}
-      {page === "auth"  && <Auth  navigate={navigate}/>}
-      {page === "queue" && <Queue navigate={navigate}/>}
-      {page === "about" && <About navigate={navigate}/>}
-      {page === "duel"  && <Duel  navigate={navigate}/>}
+      {page === "home"        && <Home        navigate={navigate}/>}
+      {page === "auth"        && <Auth        navigate={navigate}/>}
+      {page === "queue"       && <Queue       navigate={navigate}/>}
+      {page === "about"       && <About       navigate={navigate}/>}
+      {page === "duel"        && <Duel        navigate={navigate}/>}
+      {page === "leaderboard" && <Leaderboard navigate={navigate}/>}
     </>
   );
 }
