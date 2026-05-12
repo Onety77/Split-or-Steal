@@ -14,20 +14,12 @@ const { getFirestore, FieldValue, Timestamp } = require("firebase-admin/firestor
 const CREATOR_WALLET  = process.env.CREATOR_WALLET;
 const TOKEN_CA        = process.env.TOKEN_CA;
 const SOLANA_RPC      = process.env.SOLANA_RPC || "https://api.mainnet-beta.solana.com";
-const GAS_RESERVE_SOL = parseFloat(process.env.GAS_RESERVE_SOL || "0.01");
+const GAS_RESERVE_SOL = parseFloat(process.env.GAS_RESERVE_SOL || "0.05");
 
 const READY_WINDOW_MS = 45 * 1000;
 const CHAT_MS         = 1.5 * 60 * 1000;
 const VOTE_MAX_MS     = 1 * 60 * 1000;
-const CYCLE_MS        = 3 * 60 * 1000;
-
-// ── ROOM DEFINITIONS ─────────────────────────────────────────────────────────
-// Room offsets stagger payouts so they never clash
-const ROOM_CONFIGS = [
-  { id: "room_1", name: "ROOM 1", offsetMs: 0 },
-  { id: "room_2", name: "ROOM 2", offsetMs: Math.floor(CYCLE_MS / 3) },
-  { id: "room_3", name: "ROOM 3", offsetMs: Math.floor((CYCLE_MS / 3) * 2) },
-];
+const CYCLE_MS        = 5 * 60 * 1000;
 
 // ── STARTUP CHECKS ──────────────────────────────────────────────────────────
 const missing = ["CREATOR_PRIVATE_KEY","FIREBASE_SERVICE_ACCOUNT_JSON","CREATOR_WALLET","TOKEN_CA"]
@@ -48,17 +40,20 @@ initializeApp({ credential: cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT
 const db = getFirestore();
 
 // ── HELPERS ─────────────────────────────────────────────────────────────────
-const log   = (room, m) => console.log("[" + new Date().toISOString() + "] [" + room + "] " + m);
+const log   = (m) => console.log("[" + new Date().toISOString() + "] " + m);
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-// Global send mutex — serialises all SOL transfers so balance is always accurate
-let sendChain = Promise.resolve();
+let isRunning    = false;
+let roundCounter = 0;
+let cycleEndTime = Date.now() + CYCLE_MS;
+let nextTimer    = null;
 
 async function withRetry(fn, retries, label) {
   for (var i = 0; i <= retries; i++) {
     try { return await fn(); }
     catch (e) {
       if (i === retries) throw e;
+      log("  Retry " + (i+1) + "/" + retries + " for " + label + ": " + e.message);
       await sleep(1500 * (i + 1));
     }
   }
@@ -68,60 +63,49 @@ async function getBalanceLamports() {
   return withRetry(() => connection.getBalance(new PublicKey(CREATOR_WALLET)), 3, "getBalance");
 }
 
-// All sends go through the chain — one at a time, no overlaps
-function sendSOLQueued(to, lamports) {
-  sendChain = sendChain.then(async () => {
-    const tx = new Transaction().add(
-      SystemProgram.transfer({ fromPubkey: creatorKP.publicKey, toPubkey: new PublicKey(to), lamports })
-    );
-    return withRetry(
-      () => sendAndConfirmTransaction(connection, tx, [creatorKP], { commitment: "confirmed" }),
-      2, "sendSOL"
-    );
-  });
-  return sendChain;
+async function sendSOL(to, lamports) {
+  const tx = new Transaction().add(
+    SystemProgram.transfer({ fromPubkey: creatorKP.publicKey, toPubkey: new PublicKey(to), lamports })
+  );
+  return withRetry(
+    () => sendAndConfirmTransaction(connection, tx, [creatorKP], { commitment: "confirmed" }),
+    2, "sendSOL"
+  );
 }
 
-async function getWaitingPlayers(n, excludeUids) {
+async function getWaitingPlayers(n) {
   const snap = await db.collection("sos_queue")
     .where("status","==","waiting")
     .orderBy("joinedAt","asc")
-    .limit(n + (excludeUids ? excludeUids.length : 0))
+    .limit(n)
     .get();
-  const all = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-  if (!excludeUids || excludeUids.length === 0) return all.slice(0, n);
-  return all.filter(p => !excludeUids.includes(p.uid)).slice(0, n);
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
 }
 
 async function setPlayerStatus(uid, status, extra) {
   try {
     await db.doc("sos_queue/" + uid).set(Object.assign({ status }, extra || {}), { merge: true });
-  } catch (e) { console.error("setPlayerStatus failed:", e.message); }
+    log("  " + uid.slice(0,8) + "... → " + status);
+  } catch (e) { log("  setPlayerStatus FAILED: " + e.message); }
 }
 
 async function ejectPlayer(uid) {
+  log("  Ejecting " + uid.slice(0,8) + "...");
   try { await db.doc("sos_queue/" + uid).delete(); } catch {}
 }
 
 async function updateGlobal(fields) {
   try { await db.doc("sos_stats/global").set(fields, { merge: true }); }
-  catch (e) { console.error("updateGlobal failed:", e.message); }
+  catch (e) { log("  updateGlobal failed: " + e.message); }
 }
 
-function resolveOutcome(v1, v2) {
-  if (v1 === "SPLIT" && v2 === "SPLIT") return "BOTH_SPLIT";
-  if (v1 === "STEAL" && v2 === "STEAL") return "BOTH_STEAL";
-  if (v1 === "STEAL") return "P1_STEAL";
-  return "P2_STEAL";
-}
-
-// ── GET UNLOCKED ROOM COUNT ───────────────────────────────────────────────────
-async function getUnlockedRoomCount() {
-  try {
-    const snap = await db.collection("sos_rooms").get();
-    if (snap.empty) return 1;
-    return snap.docs.filter(d => d.data().unlocked).length || 1;
-  } catch { return 1; }
+function scheduleNext(ms) {
+  if (nextTimer) clearTimeout(nextTimer);
+  var safeMs = Math.max(ms, 5000);
+  var nextAt  = Date.now() + safeMs;
+  updateGlobal({ nextDuelAt: Timestamp.fromMillis(nextAt) });
+  nextTimer = setTimeout(runRound, safeMs);
+  log("  Next round in " + Math.round(safeMs / 1000) + "s");
 }
 
 // ── WAIT FOR BOTH READY ──────────────────────────────────────────────────────
@@ -140,10 +124,14 @@ function waitForBothReady(p1uid, p2uid) {
     }
 
     function check() {
-      if (p1Ready && p2Ready) done({ p1Ready: true, p2Ready: true });
+      if (p1Ready && p2Ready) {
+        log("  Both clicked READY — proceeding immediately!");
+        done({ p1Ready: true, p2Ready: true });
+      }
     }
 
     var timeoutId = setTimeout(function() {
+      log("  Ready window closed. P1: " + p1Ready + " P2: " + p2Ready);
       done({ p1Ready, p2Ready });
     }, READY_WINDOW_MS + 2000);
 
@@ -174,111 +162,114 @@ function waitForBothVotes(p1uid, p2uid, duelId) {
     }
 
     function check() {
-      if (vote1 && vote2) { log("both", "Both voted — ending early"); done(); }
+      if (vote1 && vote2) { log("  Both voted! Ending early."); done(); }
     }
 
-    var timeoutId = setTimeout(done, VOTE_MAX_MS);
+    var timeoutId = setTimeout(function() {
+      log("  Vote window closed. P1: " + (vote1||"none") + " P2: " + (vote2||"none"));
+      done();
+    }, VOTE_MAX_MS);
 
     unsubV1 = db.doc("sos_private_votes/" + p1uid).onSnapshot(function(snap) {
       if (snap.exists && snap.data().duelId === duelId && snap.data().vote) {
-        vote1 = snap.data().vote; check();
+        vote1 = snap.data().vote;
+        log("  P1 voted: " + vote1);
+        check();
       }
     });
     unsubV2 = db.doc("sos_private_votes/" + p2uid).onSnapshot(function(snap) {
       if (snap.exists && snap.data().duelId === duelId && snap.data().vote) {
-        vote2 = snap.data().vote; check();
+        vote2 = snap.data().vote;
+        log("  P2 voted: " + vote2);
+        check();
       }
     });
   });
 }
 
-// ── SINGLE ROOM RUNNER ───────────────────────────────────────────────────────
-async function runRoom(roomCfg, activeRoomUids) {
-  const roomId   = roomCfg.id;
-  const roomName = roomCfg.name;
+function resolveOutcome(v1, v2) {
+  if (v1 === "SPLIT" && v2 === "SPLIT") return "BOTH_SPLIT";
+  if (v1 === "STEAL" && v2 === "STEAL") return "BOTH_STEAL";
+  if (v1 === "STEAL") return "P1_STEAL";
+  return "P2_STEAL";
+}
+
+// ── MAIN ROUND ───────────────────────────────────────────────────────────────
+async function runRound() {
+  if (isRunning) { log("Already running, skipping."); return; }
+  isRunning = true;
+  var thisRound = ++roundCounter;
   var p1 = null, p2 = null;
-  log(roomName, "=== Round starting ===");
+  log("\n=== Round " + thisRound + " ===");
 
   try {
-    // 1. Check balance
     var balLam = await getBalanceLamports();
     var balSOL = balLam / LAMPORTS_PER_SOL;
     var gasLam = Math.ceil(GAS_RESERVE_SOL * LAMPORTS_PER_SOL);
+    log("Balance: " + balSOL.toFixed(6) + " SOL");
+    await updateGlobal({ currentPotSOL: balSOL });
 
-    // Number of unlocked rooms — split pot fairly
-    var numRooms = await getUnlockedRoomCount();
-    var myShareLam = Math.floor(Math.max(0, balLam - gasLam) / numRooms);
-    var myShareSOL = myShareLam / LAMPORTS_PER_SOL;
-
-    log(roomName, "Balance: " + balSOL.toFixed(6) + " SOL | Rooms: " + numRooms + " | My share: " + myShareSOL.toFixed(6));
-
-    if (myShareLam <= 0) {
-      log(roomName, "No pot share available. Skipping.");
+    if (balLam - gasLam <= 0) {
+      log("Pot empty. Skipping.");
+      scheduleNext(CYCLE_MS);
+      cycleEndTime = Date.now() + CYCLE_MS * 2;
+      isRunning = false;
       return;
     }
 
-    // 2. Find players — exclude players already in other rooms
     var attempts = 0;
     while (!p1 && attempts < 5) {
       attempts++;
-      var waiting = await getWaitingPlayers(4, activeRoomUids);
-      log(roomName, "Waiting players: " + waiting.length);
+      var waiting = await getWaitingPlayers(4);
+      log("Waiting players: " + waiting.length);
 
-      if (waiting.length < 2) { log(roomName, "Not enough players."); break; }
+      if (waiting.length < 2) { log("Not enough players."); break; }
 
       var c1 = waiting[0];
       var c2 = waiting[1];
-
-      // Reserve these players so other rooms don't grab them
-      activeRoomUids.push(c1.uid, c2.uid);
-
       var deadline = Date.now() + READY_WINDOW_MS;
-      log(roomName, "Ready check: " + c1.username + " vs " + c2.username);
+      var deadlineTs = Timestamp.fromMillis(deadline);
+
+      log("Ready check: " + c1.username + " vs " + c2.username);
       await Promise.all([
-        setPlayerStatus(c1.uid, "ready_check", { readyCheckEndsAt: Timestamp.fromMillis(deadline), roomId }),
-        setPlayerStatus(c2.uid, "ready_check", { readyCheckEndsAt: Timestamp.fromMillis(deadline), roomId }),
+        setPlayerStatus(c1.uid, "ready_check", { readyCheckEndsAt: deadlineTs }),
+        setPlayerStatus(c2.uid, "ready_check", { readyCheckEndsAt: deadlineTs }),
       ]);
 
       var rc = await waitForBothReady(c1.uid, c2.uid);
 
       if (rc.p1Ready && rc.p2Ready) {
         p1 = c1; p2 = c2;
-        log(roomName, "Both ready! Pairing: " + p1.username + " vs " + p2.username);
+        log("Both ready! Pairing: " + p1.username + " vs " + p2.username);
       } else {
-        // Release reserved slots
-        activeRoomUids.splice(activeRoomUids.indexOf(c1.uid), 1);
-        activeRoomUids.splice(activeRoomUids.indexOf(c2.uid), 1);
-
-        if (!rc.p1Ready) { await ejectPlayer(c1.uid); }
-        else { await setPlayerStatus(c1.uid, "waiting", { readyCheckEndsAt: null, roomId: null }); }
-        if (!rc.p2Ready) { await ejectPlayer(c2.uid); }
-        else { await setPlayerStatus(c2.uid, "waiting", { readyCheckEndsAt: null, roomId: null }); }
-
-        log(roomName, "Attempt " + attempts + " failed.");
+        if (!rc.p1Ready) { await ejectPlayer(c1.uid); cycleEndTime += READY_WINDOW_MS; }
+        else { await setPlayerStatus(c1.uid, "waiting", { readyCheckEndsAt: null }); log("  Resetting " + c1.username + " to waiting"); }
+        if (!rc.p2Ready) { await ejectPlayer(c2.uid); cycleEndTime += READY_WINDOW_MS; }
+        else { await setPlayerStatus(c2.uid, "waiting", { readyCheckEndsAt: null }); log("  Resetting " + c2.username + " to waiting"); }
+        log("Attempt " + attempts + " failed. Trying next...");
       }
     }
 
     if (!p1 || !p2) {
-      log(roomName, "Could not pair players.");
-      // Release reserved slots
-      if (p1) { activeRoomUids.splice(activeRoomUids.indexOf(p1.uid), 1); }
-      if (p2) { activeRoomUids.splice(activeRoomUids.indexOf(p2.uid), 1); }
+      log("Could not pair players.");
+      var ms1 = Math.max(cycleEndTime - Date.now(), 30000);
+      scheduleNext(ms1);
+      cycleEndTime = Date.now() + ms1 + CYCLE_MS;
+      isRunning = false;
       return;
     }
 
-    // 3. Lock pot — snapshot at this exact moment
-    var snapLam    = await getBalanceLamports();
-    var numRoomsNow= await getUnlockedRoomCount();
-    var sendLam    = Math.floor(Math.max(0, snapLam - gasLam) / numRoomsNow);
-    var lockedSOL  = sendLam / LAMPORTS_PER_SOL;
-    log(roomName, "Locked pot: " + lockedSOL.toFixed(6) + " SOL");
+    var snapLam  = await getBalanceLamports();
+    var sendLam  = Math.max(0, snapLam - gasLam);
+    var lockedSOL = sendLam / LAMPORTS_PER_SOL;
+    log("Locked pot: " + lockedSOL.toFixed(6) + " SOL");
 
-    // 4. Create duel
-    var duelId     = roomId + "_r" + Date.now();
+    var duelId     = "duel_r" + thisRound + "_" + Date.now();
     var duelNow    = Date.now();
     var chatEndsAt = Timestamp.fromMillis(duelNow + CHAT_MS);
     var voteEndsAt = Timestamp.fromMillis(duelNow + CHAT_MS + VOTE_MAX_MS);
 
+    log("Creating duel: " + duelId);
     await db.doc("sos_duels/" + duelId).set({
       player1: p1.wallet, player2: p2.wallet,
       player1Uid: p1.uid, player2Uid: p2.uid,
@@ -288,99 +279,86 @@ async function runRoom(roomCfg, activeRoomUids) {
       outcome: null,
       amount: lockedSOL, lockedLamports: sendLam,
       status: "ACTIVE", phase: "chat",
-      roomId, roomName,
       startedAt: Timestamp.now(),
       chatEndsAt, voteEndsAt,
       timestamp: Timestamp.now(),
+      round: thisRound,
     });
 
     await Promise.all([
       setPlayerStatus(p1.uid, "in_duel", { currentDuelId: duelId }),
       setPlayerStatus(p2.uid, "in_duel", { currentDuelId: duelId }),
     ]);
+    log("Players are now in_duel.");
 
-    // Update room active duel
-    await db.doc("sos_rooms/" + roomId).set({
+    await updateGlobal({
       activeDuel: {
-        duelId, player1Username: p1.username, player2Username: p2.username,
-        amount: lockedSOL, phase: "chat", chatEndsAt, voteEndsAt,
-      }
-    }, { merge: true });
-
-    // Update global active duels map
-    await db.doc("sos_stats/global").set({
-      ["activeDuels." + roomId]: {
-        duelId, roomId, roomName,
+        duelId,
+        player1: p1.wallet, player2: p2.wallet,
         player1Username: p1.username, player2Username: p2.username,
-        amount: lockedSOL, phase: "chat", chatEndsAt, voteEndsAt,
-      }
-    }, { merge: true });
+        chatEndsAt, voteEndsAt,
+        amount: lockedSOL, phase: "chat",
+      },
+    });
 
-    log(roomName, "Duel LIVE — chat phase " + (CHAT_MS/60000) + "min");
+    log("Chat phase: " + (CHAT_MS/60000) + " min...");
     await sleep(CHAT_MS);
+    log("Moving to vote phase.");
 
-    // Transition to vote
     try {
       await db.doc("sos_duels/" + duelId).update({ phase: "vote" });
-      await db.doc("sos_stats/global").set({ ["activeDuels." + roomId + ".phase"]: "vote" }, { merge: true });
-    } catch {}
+      await db.doc("sos_stats/global").set({ "activeDuel.phase": "vote" }, { merge: true });
+    } catch (e) { log("Phase update warning: " + e.message); }
 
-    log(roomName, "Vote phase...");
-    var votes = await waitForBothVotes(p1.uid, p2.uid, duelId);
+    log("Vote phase: up to " + (VOTE_MAX_MS/60000) + " min...");
+    var votes  = await waitForBothVotes(p1.uid, p2.uid, duelId);
     var vote1  = votes.vote1;
     var vote2  = votes.vote2;
-    log(roomName, "Votes: P1=" + vote1 + " P2=" + vote2);
+    var outcome= resolveOutcome(vote1, vote2);
+    log("Votes: P1=" + vote1 + " P2=" + vote2 + " | Outcome: " + outcome);
 
-    var outcome = resolveOutcome(vote1, vote2);
-    log(roomName, "Outcome: " + outcome);
-
-    // 5. Send SOL — queued so concurrent rooms never overlap
     var txSig = null;
     if (outcome === "BOTH_STEAL") {
-      log(roomName, "Both stole — pot carries over.");
+      log("Both stole — pot carries over.");
     } else if (outcome === "BOTH_SPLIT") {
       var half = Math.floor(sendLam / 2);
-      log(roomName, "Splitting " + (half/LAMPORTS_PER_SOL).toFixed(6) + " each...");
-      var tx1 = await sendSOLQueued(p1.wallet, half);
-      var tx2 = await sendSOLQueued(p2.wallet, half);
+      log("Splitting ◎" + (half/LAMPORTS_PER_SOL).toFixed(6) + " each...");
+      var tx1 = await sendSOL(p1.wallet, half);
+      var tx2 = await sendSOL(p2.wallet, half);
       txSig = tx1 + "|" + tx2;
-      log(roomName, "TX1: " + tx1 + " TX2: " + tx2);
+      log("TX1: " + tx1 + " TX2: " + tx2);
     } else {
       var winner = outcome === "P1_STEAL" ? p1 : p2;
-      log(roomName, winner.username + " steals " + lockedSOL.toFixed(6) + " SOL");
-      txSig = await sendSOLQueued(winner.wallet, sendLam);
-      log(roomName, "TX: " + txSig);
+      log(winner.username + " steals ◎" + lockedSOL.toFixed(6));
+      txSig = await sendSOL(winner.wallet, sendLam);
+      log("TX: " + txSig);
     }
 
-    // 6. Finalise
     var batch = db.batch();
     batch.update(db.doc("sos_duels/" + duelId), {
       vote1, vote2, outcome, status: "COMPLETE", phase: "complete",
       txSig: txSig || null, completedAt: Timestamp.now(),
     });
-
     var statsUp = {
       totalRounds:      FieldValue.increment(1),
       totalDistributed: FieldValue.increment(outcome === "BOTH_STEAL" ? 0 : lockedSOL),
       lastDuelAt:       Timestamp.now(),
-      ["activeDuels." + roomId]: null,
+      activeDuel:       null,
     };
     if (outcome === "BOTH_SPLIT") statsUp.totalSplits = FieldValue.increment(1);
     if (outcome === "P1_STEAL" || outcome === "P2_STEAL") statsUp.totalSteals = FieldValue.increment(1);
-
     batch.set(db.doc("sos_stats/global"), statsUp, { merge: true });
-    batch.set(db.doc("sos_rooms/" + roomId), { activeDuel: null }, { merge: true });
     batch.delete(db.doc("sos_private_votes/" + p1.uid));
     batch.delete(db.doc("sos_private_votes/" + p2.uid));
     batch.delete(db.doc("sos_queue/" + p1.uid));
     batch.delete(db.doc("sos_queue/" + p2.uid));
     await batch.commit();
+    log("Round " + thisRound + " complete.");
 
-    // Update user stats
     try {
+      var p1Earned = outcome==="BOTH_SPLIT" ? lockedSOL/2 : outcome==="P1_STEAL" ? lockedSOL : 0;
+      var p2Earned = outcome==="BOTH_SPLIT" ? lockedSOL/2 : outcome==="P2_STEAL" ? lockedSOL : 0;
       var ub = db.batch();
-      var p1Earned = outcome === "BOTH_SPLIT" ? lockedSOL/2 : outcome === "P1_STEAL" ? lockedSOL : 0;
-      var p2Earned = outcome === "BOTH_SPLIT" ? lockedSOL/2 : outcome === "P2_STEAL" ? lockedSOL : 0;
       ub.set(db.doc("sos_users/" + p1.uid), {
         splits: vote1==="SPLIT" ? FieldValue.increment(1) : FieldValue.increment(0),
         steals: vote1==="STEAL" ? FieldValue.increment(1) : FieldValue.increment(0),
@@ -394,9 +372,8 @@ async function runRoom(roomCfg, activeRoomUids) {
         wins: FieldValue.increment(p2Earned > 0 ? 1 : 0),
       }, { merge: true });
       await ub.commit();
-    } catch (e) { log(roomName, "User stats error: " + e.message); }
+    } catch (e) { log("User stats error: " + e.message); }
 
-    // Biggest pot
     try {
       var gs = await db.doc("sos_stats/global").get();
       if (gs.exists && lockedSOL > (gs.data().biggestPot || 0)) {
@@ -404,107 +381,27 @@ async function runRoom(roomCfg, activeRoomUids) {
       }
     } catch {}
 
-    log(roomName, "=== Round complete ===");
+    var remainingMs = Math.max(cycleEndTime - Date.now(), 60000);
+    log("Cycle remaining: " + Math.round(remainingMs/1000) + "s");
+    scheduleNext(remainingMs);
+    cycleEndTime = Date.now() + remainingMs + CYCLE_MS;
 
   } catch (err) {
-    log(roomName, "ROUND ERROR: " + (err.message || err));
-    if (p1) { await ejectPlayer(p1.uid).catch(() => {}); }
-    if (p2) { await ejectPlayer(p2.uid).catch(() => {}); }
-    try {
-      await db.doc("sos_rooms/" + roomId).set({ activeDuel: null }, { merge: true });
-      await db.doc("sos_stats/global").set({ ["activeDuels." + roomId]: null }, { merge: true });
-    } catch {}
+    log("=== ROUND ERROR: " + (err.message || err) + " ===");
+    if (p1) await ejectPlayer(p1.uid);
+    if (p2) await ejectPlayer(p2.uid);
+    try { await updateGlobal({ activeDuel: null }); scheduleNext(CYCLE_MS); } catch {}
   }
 
-  // Release reserved player UIDs
-  if (p1) { var i1 = activeRoomUids.indexOf(p1.uid); if (i1 > -1) activeRoomUids.splice(i1, 1); }
-  if (p2) { var i2 = activeRoomUids.indexOf(p2.uid); if (i2 > -1) activeRoomUids.splice(i2, 1); }
-}
-
-// ── ROOM LOOP — runs forever for one room ────────────────────────────────────
-async function startRoomLoop(roomCfg, activeRoomUids) {
-  const roomId   = roomCfg.id;
-  const roomName = roomCfg.name;
-
-  // Stagger start
-  if (roomCfg.offsetMs > 0) {
-    log(roomName, "Starting in " + Math.round(roomCfg.offsetMs/1000) + "s...");
-    await sleep(roomCfg.offsetMs);
-  }
-
-  log(roomName, "Room loop started.");
-
-  while (true) {
-    try {
-      // Check if still unlocked
-      var roomDoc = await db.doc("sos_rooms/" + roomId).get();
-      if (!roomDoc.exists || !roomDoc.data().unlocked) {
-        log(roomName, "Room locked — sleeping 30s...");
-        await sleep(30000);
-        continue;
-      }
-
-      // Update next duel time
-      var nextAt = Date.now() + CYCLE_MS;
-      await db.doc("sos_rooms/" + roomId).set({ nextDuelAt: Timestamp.fromMillis(nextAt) }, { merge: true });
-
-      await runRoom(roomCfg, activeRoomUids);
-    } catch (e) {
-      log(roomName, "Loop error: " + e.message);
-    }
-
-    await sleep(CYCLE_MS);
-  }
-}
-
-// ── INIT ROOMS IN FIRESTORE ───────────────────────────────────────────────────
-async function initRooms() {
-  const rooms = [
-    { id: "room_1", name: "ROOM 1", unlocked: true  },
-    { id: "room_2", name: "ROOM 2", unlocked: false },
-    { id: "room_3", name: "ROOM 3", unlocked: false },
-  ];
-  for (var r of rooms) {
-    var snap = await db.doc("sos_rooms/" + r.id).get();
-    if (!snap.exists) {
-      await db.doc("sos_rooms/" + r.id).set({
-        id:         r.id,
-        name:       r.name,
-        unlocked:   r.unlocked,
-        activeDuel: null,
-        nextDuelAt: null,
-      });
-      log("INIT", "Created " + r.name + " (unlocked: " + r.unlocked + ")");
-    }
-  }
+  log("─────────────────────────\n");
+  isRunning = false;
 }
 
 // ── BOOT ─────────────────────────────────────────────────────────────────────
-console.log("\n  $SOS Engine v6 — Multi-Room");
+console.log("\n  $SOS Engine v5 — Event-Driven");
 console.log("  Wallet : " + CREATOR_WALLET);
-log("MAIN", "Gas Reserve: " + GAS_RESERVE_SOL + " SOL | Chat: " + (CHAT_MS/60000) + "min | Vote: " + (VOTE_MAX_MS/60000) + "min | Cycle: " + (CYCLE_MS/60000) + "min");
-log("MAIN", "────────────────────────────────────────────");
+log("Gas Reserve: " + GAS_RESERVE_SOL + " SOL | Chat: " + (CHAT_MS/60000) + "min | Vote: " + (VOTE_MAX_MS/60000) + "min | Cycle: " + (CYCLE_MS/60000) + "min");
+log("────────────────────────────────────────────");
 
-// Shared array of UIDs currently reserved by any room (prevents double-booking)
-var activeRoomUids = [];
-
-initRooms().then(() => {
-  startAutoClaimFees(connection, creatorKP, (m) => log("CLAIM", m));
-
-  // Start all 3 room loops — each checks if it's unlocked before running
-  for (var rc of ROOM_CONFIGS) {
-    startRoomLoop(rc, activeRoomUids);
-  }
-
-  // Update global pot every 30s
-  setInterval(async () => {
-    try {
-      var bal = await getBalanceLamports();
-      await updateGlobal({ currentPotSOL: bal / LAMPORTS_PER_SOL });
-    } catch {}
-  }, 30000);
-
-}).catch(e => {
-  console.error("Boot error:", e.message);
-  process.exit(1);
-});
+startAutoClaimFees(connection, creatorKP, log);
+runRound();

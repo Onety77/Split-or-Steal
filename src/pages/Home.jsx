@@ -1,30 +1,30 @@
 import { useState, useEffect, useRef } from "react";
 import {
-  collection, query, orderBy, limit, onSnapshot, doc, setDoc,
+  collection, query, orderBy, limit, onSnapshot, doc, getDocs,
 } from "firebase/firestore";
 import { db } from "../firebase";
 import { useAuth } from "../context/AuthContext";
 import Orb from "../components/Orb";
 
-const X_URL         = "https://x.com/splitorsteal26";
+const X_URL         = "https://x.com/REPLACE_YOUR_HANDLE";
 const COMMUNITY_URL = "https://x.com/i/communities/REPLACE";
 const TOKEN_CA      = "13SVgpzFcZf8vF6Tg1QV7vec82FdJrf4Kg2VEX4xpump";
-const DUEL_INTERVAL = 3 * 60 * 1000;
+const DUEL_INTERVAL = 5 * 60 * 1000;
 const ADMIN_USER    = "admin77";
 
 const short   = (a) => a ? a.slice(0,4)+"..."+a.slice(-4) : "—";
 const fmtSOL  = (n) => (!n && n !== 0) ? "—" : n.toFixed(4);
 const timeAgo = (ms) => {
   const s = Math.floor((Date.now()-ms)/1000);
-  if (s<60)    return s+"s ago";
-  if (s<3600)  return Math.floor(s/60)+"m ago";
+  if (s<60) return s+"s ago";
+  if (s<3600) return Math.floor(s/60)+"m ago";
   if (s<86400) return Math.floor(s/3600)+"h ago";
   return Math.floor(s/86400)+"d ago";
 };
 const outcomeLabel = (d) => {
   if (d.outcome==="BOTH_SPLIT") return "Both Split 🤝";
   if (d.outcome==="BOTH_STEAL") return "Both Stole 💀";
-  if (d.vote1==="STEAL")        return "P1 Betrayed 🗡️";
+  if (d.vote1==="STEAL") return "P1 Betrayed 🗡️";
   return "P2 Betrayed 🗡️";
 };
 const outcomeColor = (o) => {
@@ -44,12 +44,12 @@ function useWindowWidth() {
 }
 
 const PARTICLES = Array.from({length:18},(_,i)=>({
-  id:i,left:((i*5.6+1.3)%100)+"%",
-  dur:(13+((i*2.8)%10))+"s",delay:((i*1.6)%13)+"s",
-  size:i%5===0?3:2,type:i%4,
+  id:i, left:((i*5.6+1.3)%100)+"%",
+  dur:(13+((i*2.8)%10))+"s", delay:((i*1.6)%13)+"s",
+  size:i%5===0?3:2, type:i%4,
 }));
 
-const R2=44,C2=2*Math.PI*R2;
+const R2=44, C2=2*Math.PI*R2;
 
 function MiniRing({countdown,total}) {
   const pct=Math.max(0,Math.min(1,countdown/total));
@@ -81,9 +81,9 @@ function HowItWorksModal({onClose}) {
     return ()=>window.removeEventListener("keydown",h);
   },[onClose]);
   const outcomes=[
-    {votes:["SPLIT","SPLIT"],color:"var(--green)",border:"rgba(0,200,83,0.25)",bg:"rgba(0,200,83,0.06)",bar:"linear-gradient(90deg,#00C853,#69F0AE)",title:"BOTH SPLIT",icon:"🤝",desc:"Trust wins. The pot splits equally."},
-    {votes:["STEAL","SPLIT"],color:"var(--red2)",border:"rgba(204,32,32,0.25)",bg:"rgba(204,32,32,0.06)",bar:"linear-gradient(90deg,#CC2020,#FF5252)",title:"BETRAYAL",icon:"🗡️",desc:"One trusted. One stole. The stealer takes everything."},
-    {votes:["STEAL","STEAL"],color:"#90A4AE",border:"rgba(96,125,139,0.25)",bg:"rgba(69,90,100,0.08)",bar:"linear-gradient(90deg,#37474F,#607D8B)",title:"BOTH STEAL",icon:"💀",desc:"Neither trusted. Both got nothing. The pot grows for next round."},
+    {votes:["SPLIT","SPLIT"],color:"var(--green)",border:"rgba(0,200,83,0.25)",bg:"rgba(0,200,83,0.06)",bar:"linear-gradient(90deg,#00C853,#69F0AE)",title:"BOTH SPLIT",icon:"🤝",desc:"Trust wins. The pot splits equally. Everyone walks away with something."},
+    {votes:["STEAL","SPLIT"],color:"var(--red2)",border:"rgba(204,32,32,0.25)",bg:"rgba(204,32,32,0.06)",bar:"linear-gradient(90deg,#CC2020,#FF5252)",title:"BETRAYAL",icon:"🗡️",desc:"One trusted. One stole. The stealer takes everything. Their wallet is on the ledger forever."},
+    {votes:["STEAL","STEAL"],color:"#90A4AE",border:"rgba(96,125,139,0.25)",bg:"rgba(69,90,100,0.08)",bar:"linear-gradient(90deg,#37474F,#607D8B)",title:"BOTH STEAL",icon:"💀",desc:"Neither trusted. Both got nothing. The pot carries over and grows for next round."},
   ];
   return (
     <div onClick={e=>e.target===e.currentTarget&&onClose()} style={{position:"fixed",inset:0,zIndex:600,background:"rgba(8,6,4,0.93)",display:"flex",alignItems:"center",justifyContent:"center",padding:"20px 16px",animation:"fade-in 0.25s ease",backdropFilter:"blur(8px)",WebkitBackdropFilter:"blur(8px)"}}>
@@ -93,7 +93,7 @@ function HowItWorksModal({onClose}) {
           <button onClick={onClose} style={{background:"rgba(255,255,255,0.06)",border:"1px solid var(--border)",borderRadius:8,cursor:"pointer",color:"var(--muted)",fontSize:20,width:36,height:36,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>×</button>
         </div>
         <div style={{padding:"18px 26px",borderBottom:"1px solid var(--border)"}}>
-          {[["01","Hold $10+ worth of $SOS to qualify. Wallet verified automatically."],["02","Join the queue. Every few minutes, top two players are called."],["03","90 seconds to click READY or you are ejected."],["04","Private chat opens — negotiate or stay silent. Then vote in secret."],["05","Both votes reveal simultaneously. SOL sent on-chain instantly."]].map(([n,t])=>(
+          {[["01","Hold $SOS tokens to qualify. Wallet verified on-chain automatically."],["02","Join the queue. Every few minutes, top two players are called."],["03","45 seconds to click READY or you are ejected."],["04","Private chat opens — negotiate or stay silent."],["05","Vote in secret: SPLIT or STEAL. Reveal happens simultaneously. SOL sent on-chain instantly."]].map(([n,t])=>(
             <div key={n} style={{display:"flex",gap:14,alignItems:"flex-start",marginBottom:12}}>
               <span style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:"rgba(255,184,0,0.2)",flexShrink:0,minWidth:28,lineHeight:1.3}}>{n}</span>
               <p style={{fontFamily:"'Barlow',sans-serif",fontSize:13,color:"var(--muted)",lineHeight:1.65,margin:0}}>{t}</p>
@@ -124,32 +124,34 @@ function HowItWorksModal({onClose}) {
 function DuelDetailModal({duel,onClose,isAdmin}) {
   const [chat,setChat]=useState([]);
   const [loadingChat,setLoadingChat]=useState(true);
+
   useEffect(()=>{
     const h=(e)=>{if(e.key==="Escape")onClose();};
     window.addEventListener("keydown",h);
     return ()=>window.removeEventListener("keydown",h);
   },[onClose]);
+
   useEffect(()=>{
     if(!duel?.id)return;
-    const {getDocs,query:q,collection:col,orderBy:ob}=require("firebase/firestore");
-    import("firebase/firestore").then(({getDocs,query,collection,orderBy})=>{
-      getDocs(query(collection(db,"sos_duels",duel.id,"chat"),orderBy("timestamp","asc")))
-        .then(snap=>{setChat(snap.docs.map(d=>({id:d.id,...d.data()})));setLoadingChat(false);})
-        .catch(()=>setLoadingChat(false));
-    });
+    getDocs(query(collection(db,"sos_duels",duel.id,"chat"),orderBy("timestamp","asc")))
+      .then(snap=>{setChat(snap.docs.map(d=>({id:d.id,...d.data()})));setLoadingChat(false);})
+      .catch(()=>setLoadingChat(false));
   },[duel?.id]);
+
   const color=outcomeColor(duel.outcome);
   const label=outcomeLabel(duel);
   const isSplit=duel.outcome==="BOTH_SPLIT";
   const isSteal=duel.outcome==="BOTH_STEAL";
+  const round=duel.round?"ROUND "+duel.round:"RECENT ROUND";
   const tweetText=isSplit
-    ?duel.player1Username+" and "+duel.player2Username+" both SPLIT ◎"+fmtSOL(duel.amount)+" on $SOS 🤝 Trust exists on-chain."
+    ?"🤝 SPLIT OR STEAL — "+round+"\n\n"+duel.player1Username+" split with "+duel.player2Username+"\n◎ "+fmtSOL(duel.amount)+" SOL shared equally\n\nBoth walked away with something.\nTrust is rare on-chain.\n\nsplitorsteal.xyz\n$SOS #SplitOrSteal #Solana"
     :isSteal
-    ?"Both "+duel.player1Username+" and "+duel.player2Username+" chose STEAL on $SOS 💀 Nobody wins. The pot grows."
+    ?"💀 SPLIT OR STEAL — "+round+"\n\n"+duel.player1Username+" vs "+duel.player2Username+"\n◎ "+fmtSOL(duel.amount)+" SOL — NOBODY WINS\n\nBoth reached for everything.\nBoth got nothing. The pot grows.\n\nsplitorsteal.xyz\n$SOS #SplitOrSteal #Solana"
     :duel.vote1==="STEAL"
-    ?duel.player1Username+" BETRAYED "+duel.player2Username+" and stole ◎"+fmtSOL(duel.amount)+" on $SOS 🗡️ Ruthless."
-    :duel.player2Username+" BETRAYED "+duel.player1Username+" and stole ◎"+fmtSOL(duel.amount)+" on $SOS 🗡️ Ruthless.";
+    ?"🗡️ SPLIT OR STEAL — "+round+"\n\n"+duel.player1Username+" BETRAYED "+duel.player2Username+"\n◎ "+fmtSOL(duel.amount)+" SOL stolen\n\n"+duel.player2Username+" chose SPLIT.\n"+duel.player1Username+" chose STEAL.\nNo mercy.\n\nsplitorsteal.xyz\n$SOS #SplitOrSteal #Solana"
+    :"🗡️ SPLIT OR STEAL — "+round+"\n\n"+duel.player2Username+" BETRAYED "+duel.player1Username+"\n◎ "+fmtSOL(duel.amount)+" SOL stolen\n\n"+duel.player1Username+" chose SPLIT.\n"+duel.player2Username+" chose STEAL.\nNo mercy.\n\nsplitorsteal.xyz\n$SOS #SplitOrSteal #Solana";
   const tweetUrl="https://twitter.com/intent/tweet?text="+encodeURIComponent(tweetText);
+
   return (
     <div onClick={e=>e.target===e.currentTarget&&onClose()} style={{position:"fixed",inset:0,zIndex:700,background:"rgba(8,6,4,0.95)",display:"flex",alignItems:"center",justifyContent:"center",padding:"20px 16px",animation:"fade-in 0.2s ease",backdropFilter:"blur(10px)",WebkitBackdropFilter:"blur(10px)"}}>
       <div style={{width:"100%",maxWidth:540,background:"var(--bg2)",border:"1px solid "+color+"44",borderRadius:20,overflow:"hidden",animation:"slide-up 0.3s ease",maxHeight:"90vh",overflowY:"auto"}}>
@@ -186,7 +188,7 @@ function DuelDetailModal({duel,onClose,isAdmin}) {
         <div style={{padding:"16px 24px 24px"}}>
           <div className="label" style={{marginBottom:14,color:"var(--muted)"}}>CHAT TRANSCRIPT</div>
           {loadingChat?(<p style={{fontFamily:"'Barlow',sans-serif",fontSize:13,color:"var(--dim)",fontStyle:"italic"}}>Loading...</p>):chat.length===0?(<p style={{fontFamily:"'Barlow',sans-serif",fontSize:13,color:"var(--dim)",fontStyle:"italic"}}>No messages were sent in this duel.</p>):(
-            <div style={{display:"flex",flexDirection:"column",gap:10,maxHeight:260,overflowY:"auto",padding:"4px 0"}}>
+            <div style={{display:"flex",flexDirection:"column",gap:10,maxHeight:260,overflowY:"auto"}}>
               {chat.map(m=>(<div key={m.id} style={{display:"flex",gap:10,alignItems:"flex-start"}}><span style={{fontFamily:"'Oswald',sans-serif",fontSize:11,fontWeight:700,color:"var(--gold)",flexShrink:0,minWidth:60,paddingTop:2}}>{m.username}</span><span style={{fontFamily:"'Barlow',sans-serif",fontSize:14,color:"var(--muted)",lineHeight:1.5,wordBreak:"break-word"}}>{m.text}</span></div>))}
             </div>
           )}
@@ -214,42 +216,6 @@ function OrbSection({isMobile}) {
   );
 }
 
-// ── Admin Room Toggle ──────────────────────────────────────────────────────────
-function AdminRoomPanel({rooms}) {
-  const toggleRoom = async (roomId, currentlyUnlocked) => {
-    try {
-      await setDoc(doc(db,"sos_rooms",roomId),{unlocked:!currentlyUnlocked},{merge:true});
-    } catch(e){console.error(e);}
-  };
-  return (
-    <div style={{padding:"0 24px",maxWidth:"var(--max-w)",margin:"0 auto 48px"}}>
-      <div className="card" style={{border:"1px solid rgba(255,184,0,0.2)"}}>
-        <div className="label" style={{marginBottom:16,color:"var(--gold)"}}>ADMIN — ROOM CONTROL</div>
-        <div style={{display:"flex",flexDirection:"column",gap:12}}>
-          {rooms.map(r=>(
-            <div key={r.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:16,padding:"12px 16px",background:r.unlocked?"rgba(0,200,83,0.06)":"rgba(255,255,255,0.02)",border:"1px solid "+(r.unlocked?"rgba(0,200,83,0.2)":"var(--border)"),borderRadius:10}}>
-              <div>
-                <div style={{fontFamily:"'Oswald',sans-serif",fontSize:14,fontWeight:600,color:r.unlocked?"var(--green)":"var(--dim)",letterSpacing:1}}>{r.name}</div>
-                <div style={{fontFamily:"'Barlow',sans-serif",fontSize:12,color:"var(--dim)",marginTop:2}}>{r.unlocked?"Active — taking players":"Locked — not running"}</div>
-              </div>
-              <button onClick={()=>toggleRoom(r.id,r.unlocked)} style={{
-                padding:"8px 20px",borderRadius:8,cursor:"pointer",
-                fontFamily:"'Oswald',sans-serif",fontSize:12,fontWeight:600,letterSpacing:2,
-                background:r.unlocked?"rgba(204,32,32,0.1)":"rgba(0,200,83,0.1)",
-                border:"1px solid "+(r.unlocked?"rgba(204,32,32,0.3)":"rgba(0,200,83,0.3)"),
-                color:r.unlocked?"var(--red2)":"var(--green)",
-                transition:"all 0.2s",
-              }}>
-                {r.unlocked?"LOCK":"UNLOCK"}
-              </button>
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 export default function Home({navigate}) {
   const width=useWindowWidth();
   const isMobile=width<640;
@@ -258,7 +224,6 @@ export default function Home({navigate}) {
 
   const [stats,       setStats]       = useState(null);
   const [duels,       setDuels]       = useState([]);
-  const [rooms,       setRooms]       = useState([]);
   const [liveChat,    setLiveChat]    = useState([]);
   const [countdown,   setCountdown]   = useState(DUEL_INTERVAL);
   const [copiedCA,    setCopiedCA]    = useState(false);
@@ -284,12 +249,6 @@ export default function Home({navigate}) {
   },[]);
 
   useEffect(()=>{
-    return onSnapshot(collection(db,"sos_rooms"),snap=>{
-      setRooms(snap.docs.map(d=>({id:d.id,...d.data()})));
-    });
-  },[]);
-
-  useEffect(()=>{
     const duelId=stats?.activeDuel?.duelId;
     if(!duelId){setLiveChat([]);return;}
     const q=query(collection(db,"sos_duels",duelId,"chat"),orderBy("timestamp","asc"),limit(30));
@@ -310,7 +269,6 @@ export default function Home({navigate}) {
   const copyCA=()=>{navigator.clipboard.writeText(TOKEN_CA);setCopiedCA(true);setTimeout(()=>setCopiedCA(false),2200);};
 
   const activeDuel  = stats?.activeDuel       ?? null;
-  const activeDuels = stats?.activeDuels      ?? {};
   const currentPot  = stats?.currentPotSOL    ?? null;
   const totalPaid   = stats?.totalDistributed ?? 0;
   const totalRounds = stats?.totalRounds      ?? 0;
@@ -318,9 +276,6 @@ export default function Home({navigate}) {
   const totalSteals = stats?.totalSteals      ?? 0;
   const biggestPot  = stats?.biggestPot       ?? 0;
   const pad=isMobile?"0 16px":"0 24px";
-
-  // Collect all active duels across rooms
-  const activeDuelsList = Object.values(activeDuels).filter(Boolean);
 
   return (
     <div className="page">
@@ -367,70 +322,48 @@ export default function Home({navigate}) {
         </div>
       </section>
 
-      {/* LIVE DUELS — multi-room */}
+      {/* LIVE DUEL */}
       <section style={{padding:pad,paddingBottom:52,maxWidth:"var(--max-w)",margin:"0 auto"}}>
         <div style={{marginBottom:18}}>
           <span className="label" style={{color:"var(--gold)"}}>● LIVE</span>
-          <h2 style={{fontFamily:"'Russo One',sans-serif",fontSize:isMobile?22:30,letterSpacing:"0.08em",color:"var(--text)",marginTop:8}}>ACTIVE DUELS</h2>
+          <h2 style={{fontFamily:"'Russo One',sans-serif",fontSize:isMobile?22:30,letterSpacing:"0.08em",color:"var(--text)",marginTop:8}}>CURRENT DUEL</h2>
         </div>
-
-        {activeDuelsList.length > 0 ? (
-          <div style={{display:"flex",flexDirection:"column",gap:14}}>
-            {activeDuelsList.map(duel=>(
-              <div key={duel.duelId} className="card" style={{border:"1px solid rgba(255,184,0,0.25)",animation:"glow-gold 4s ease-in-out infinite",position:"relative",overflow:"hidden",padding:isMobile?"18px 14px":"24px 28px"}}>
-                <div style={{position:"absolute",top:0,left:0,right:0,height:3,background:"linear-gradient(90deg,var(--gold2),var(--gold3),var(--gold2))",backgroundSize:"200%",animation:"shine 2s linear infinite"}}/>
-                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,marginBottom:10}}>
-                  <div style={{textAlign:"center",flex:1,minWidth:0}}>
-                    <div className="label" style={{marginBottom:6,color:"var(--muted)",fontSize:8}}>P1</div>
-                    <div style={{fontFamily:"'Oswald',sans-serif",fontSize:isMobile?13:17,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{duel.player1Username||"—"}</div>
-                  </div>
-                  <div style={{flexShrink:0,textAlign:"center"}}>
-                    <div style={{fontFamily:"'Russo One',sans-serif",fontSize:isMobile?16:20,color:"var(--gold)"}}>◎ {fmtSOL(duel.amount)}</div>
-                    <div style={{fontFamily:"'Oswald',sans-serif",fontSize:8,letterSpacing:3,color:"var(--muted)",marginTop:4}}>{duel.roomName||"ROOM"}</div>
-                    <div style={{marginTop:6}}>
-                      <span style={{display:"inline-block",padding:"3px 10px",borderRadius:20,fontFamily:"'Oswald',sans-serif",fontSize:8,fontWeight:600,letterSpacing:3,background:duel.phase==="vote"?"rgba(204,32,32,0.12)":"rgba(255,184,0,0.1)",color:duel.phase==="vote"?"var(--red2)":"var(--gold)",border:"1px solid "+(duel.phase==="vote"?"rgba(204,32,32,0.3)":"rgba(255,184,0,0.25)")}}>
-                        {duel.phase==="vote"?"🗳️ VOTE":"🗣️ CHAT"}
-                      </span>
-                    </div>
-                  </div>
-                  <div style={{textAlign:"center",flex:1,minWidth:0}}>
-                    <div className="label" style={{marginBottom:6,color:"var(--muted)",fontSize:8}}>P2</div>
-                    <div style={{fontFamily:"'Oswald',sans-serif",fontSize:isMobile?13:17,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{duel.player2Username||"—"}</div>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        ) : activeDuel ? (
-          // Fallback: single activeDuel (old format)
-          <div className="card" style={{border:"1px solid rgba(255,184,0,0.25)",position:"relative",overflow:"hidden",padding:isMobile?"18px 14px":"24px 28px"}}>
-            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8}}>
+        {activeDuel?(
+          <div className="card" style={{border:"1px solid rgba(255,184,0,0.25)",animation:"glow-gold 4s ease-in-out infinite",position:"relative",overflow:"hidden",padding:isMobile?"18px 14px":"24px 28px"}}>
+            <div style={{position:"absolute",top:0,left:0,right:0,height:3,background:"linear-gradient(90deg,var(--gold2),var(--gold3),var(--gold2))",backgroundSize:"200%",animation:"shine 2s linear infinite"}}/>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,marginBottom:14}}>
               <div style={{textAlign:"center",flex:1,minWidth:0}}>
                 <div className="label" style={{marginBottom:6,color:"var(--muted)",fontSize:8}}>P1</div>
-                <div style={{fontFamily:"'Oswald',sans-serif",fontSize:isMobile?13:17,fontWeight:600}}>{activeDuel.player1Username||short(activeDuel.player1)}</div>
+                <div style={{fontFamily:"'Oswald',sans-serif",fontSize:isMobile?13:17,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{activeDuel.player1Username||short(activeDuel.player1)}</div>
               </div>
               <div style={{flexShrink:0}}><MiniRing countdown={countdown} total={5*60*1000}/></div>
               <div style={{textAlign:"center",flex:1,minWidth:0}}>
                 <div className="label" style={{marginBottom:6,color:"var(--muted)",fontSize:8}}>P2</div>
-                <div style={{fontFamily:"'Oswald',sans-serif",fontSize:isMobile?13:17,fontWeight:600}}>{activeDuel.player2Username||short(activeDuel.player2)}</div>
+                <div style={{fontFamily:"'Oswald',sans-serif",fontSize:isMobile?13:17,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{activeDuel.player2Username||short(activeDuel.player2)}</div>
               </div>
             </div>
-            <div style={{textAlign:"center",marginTop:10}}>
+            <div style={{textAlign:"center",marginBottom:10}}>
               <div style={{fontFamily:"'Russo One',sans-serif",fontSize:isMobile?18:22,color:"var(--gold)"}}>◎ {fmtSOL(activeDuel.amount)} <span style={{color:"var(--muted)",fontSize:11}}>at stake</span></div>
             </div>
+            <div style={{textAlign:"center",marginBottom:liveChat.length>0?12:0}}>
+              <span style={{display:"inline-block",padding:"4px 14px",borderRadius:20,fontFamily:"'Oswald',sans-serif",fontSize:9,fontWeight:600,letterSpacing:3,background:activeDuel.phase==="vote"?"rgba(204,32,32,0.12)":"rgba(255,184,0,0.1)",color:activeDuel.phase==="vote"?"var(--red2)":"var(--gold)",border:"1px solid "+(activeDuel.phase==="vote"?"rgba(204,32,32,0.3)":"rgba(255,184,0,0.25)")}}>
+                {activeDuel.phase==="vote"?"🗳️ VOTE PHASE":"🗣️ CHAT PHASE"}
+              </span>
+            </div>
             {liveChat.length>0&&(
-              <div style={{background:"rgba(0,0,0,0.2)",border:"1px solid var(--border)",borderRadius:10,overflow:"hidden",marginTop:12}}>
+              <div style={{background:"rgba(0,0,0,0.2)",border:"1px solid var(--border)",borderRadius:10,overflow:"hidden"}}>
                 <div style={{padding:"6px 12px",borderBottom:"1px solid var(--border)",display:"flex",alignItems:"center",gap:7}}>
                   <div style={{width:5,height:5,borderRadius:"50%",background:"var(--green)",boxShadow:"0 0 5px var(--green)"}}/>
-                  <span style={{fontFamily:"'Oswald',sans-serif",fontSize:8,letterSpacing:3,color:"var(--muted)"}}>LIVE CHAT</span>
+                  <span style={{fontFamily:"'Oswald',sans-serif",fontSize:8,letterSpacing:3,color:"var(--muted)"}}>LIVE CHAT — SPECTATOR VIEW</span>
                 </div>
                 <div style={{maxHeight:140,overflowY:"auto",padding:"10px 12px",display:"flex",flexDirection:"column",gap:6}}>
                   {liveChat.map(m=>(<div key={m.id} style={{animation:"chat-in 0.3s ease"}}><span style={{fontFamily:"'Oswald',sans-serif",fontSize:10,fontWeight:600,color:"var(--gold)",letterSpacing:1,marginRight:8}}>{m.username}</span><span style={{fontFamily:"'Barlow',sans-serif",fontSize:13,color:"var(--muted)"}}>{m.text}</span></div>))}
                 </div>
               </div>
             )}
+            {liveChat.length===0&&activeDuel.phase==="chat"&&(<p style={{textAlign:"center",fontSize:12,color:"var(--dim)",fontFamily:"'Barlow',sans-serif",fontStyle:"italic",margin:0}}>Waiting for players to start chatting...</p>)}
           </div>
-        ) : (
+        ):(
           <div className="card" style={{textAlign:"center",padding:isMobile?"32px 16px":"44px"}}>
             <MiniRing countdown={countdown} total={DUEL_INTERVAL}/>
             <p style={{marginTop:14,fontFamily:"'Oswald',sans-serif",fontSize:11,letterSpacing:4,color:"var(--muted)"}}>NEXT DUEL IN</p>
@@ -459,15 +392,12 @@ export default function Home({navigate}) {
             {duels.map((d,i)=>{
               const color=outcomeColor(d.outcome);
               const label=outcomeLabel(d);
-              return (
-                <div key={d.id} onClick={()=>setSelectedDuel(d)} style={{background:"var(--card)",border:"1px solid "+color+"22",borderRadius:12,padding:isMobile?"14px":"18px 20px",position:"relative",overflow:"hidden",animation:"slide-up 0.5s ease "+(i*0.05)+"s both",cursor:"pointer",transition:"border-color 0.2s, background 0.2s"}}
+              return(
+                <div key={d.id} onClick={()=>setSelectedDuel(d)} style={{background:"var(--card)",border:"1px solid "+color+"22",borderRadius:12,padding:isMobile?"14px":"18px 20px",position:"relative",overflow:"hidden",animation:"slide-up 0.5s ease "+(i*0.05)+"s both",cursor:"pointer",transition:"border-color 0.2s,background 0.2s"}}
                   onMouseEnter={e=>{e.currentTarget.style.borderColor=color+"55";e.currentTarget.style.background="rgba(255,184,0,0.06)";}}
                   onMouseLeave={e=>{e.currentTarget.style.borderColor=color+"22";e.currentTarget.style.background="var(--card)";}}>
                   <div style={{position:"absolute",top:0,left:0,right:0,height:3,background:"linear-gradient(90deg,"+color+","+color+"55)"}}/>
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
-                    <div style={{fontFamily:"'Oswald',sans-serif",fontSize:10,fontWeight:600,color,letterSpacing:2}}>{label}</div>
-                    {d.roomName&&<div style={{fontFamily:"'Oswald',sans-serif",fontSize:8,letterSpacing:2,color:"var(--dim)"}}>{d.roomName}</div>}
-                  </div>
+                  <div style={{fontFamily:"'Oswald',sans-serif",fontSize:10,fontWeight:600,color,letterSpacing:2,marginBottom:10}}>{label}</div>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:isMobile?6:12}}>
                     <div style={{textAlign:"center",flex:1,minWidth:0}}>
                       <div style={{fontFamily:"'Oswald',sans-serif",fontSize:isMobile?12:14,fontWeight:600,color:"var(--text)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",marginBottom:6}}>{d.player1Username||short(d.player1)}</div>
@@ -499,9 +429,6 @@ export default function Home({navigate}) {
           </div>
         )}
       </section>
-
-      {/* ADMIN ROOM PANEL */}
-      {isAdmin && rooms.length > 0 && <AdminRoomPanel rooms={rooms}/>}
 
       {/* CA */}
       <section style={{padding:pad,paddingBottom:72,maxWidth:"var(--max-w)",margin:"0 auto"}}>
