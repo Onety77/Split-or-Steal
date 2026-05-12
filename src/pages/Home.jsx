@@ -6,9 +6,9 @@ import { db } from "../firebase";
 import { useAuth } from "../context/AuthContext";
 import Orb from "../components/Orb";
 
-const X_URL         = "https://x.com/REPLACE_YOUR_HANDLE";
-const COMMUNITY_URL = "https://x.com/i/communities/REPLACE";
-const TOKEN_CA      = "13SVgpzFcZf8vF6Tg1QV7vec82FdJrf4Kg2VEX4xpump";
+const X_URL         = "https://x.com/splitorsteal26?s=21";
+const COMMUNITY_URL = "https://x.com/splitorsteal26?s=21";
+const TOKEN_CA      = "GVkQKdubVk57GXoneqHZ3RtVYjUAgTst9W8C2w2ppump";
 const DUEL_INTERVAL = 10 * 60 * 1000;
 const ADMIN_USER    = "admin77";
 

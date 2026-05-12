@@ -144,7 +144,7 @@ export default function About({ navigate }) {
               marginBottom:12,
             }}>
               "I'm going to choose STEAL — but here's what I want you to do.
-              I want you to choose STEAL too. And then I promise I'll split the money with you
+              I want you to choose SPLIT. And then I promise I'll split the money with you
               after the show."
             </p>
             <p style={{ fontSize:12, color:"var(--muted)", letterSpacing:2, fontFamily:"'Oswald',sans-serif" }}>
@@ -157,11 +157,11 @@ export default function About({ navigate }) {
             fontSize:16, color:"var(--muted)", lineHeight:1.85,
             marginBottom:20,
           }}>
-            Nick's opponent chose STEAL. Then Nick, true to his word, chose STEAL — because
-            he knew if he showed SPLIT, the other person would betray him. He broke the game
-            by reframing it entirely. His opponent, forced into a corner by the promise of a
-            post-show split, also chose STEAL — and both walked away with nothing.
-            It was genius, madness, and philosophy all at once.
+            Nick's opponent, faced with the certainty that Nick would steal no matter what,
+realised the only logical move was to trust the promise of a post-show split.
+He chose SPLIT. And Nick — in a twist nobody saw coming — chose SPLIT too.
+They both walked away with the money. The crowd went mad.
+It was manipulation, gamble, and somehow — the most honest outcome of all.
           </p>
 
           <p style={{
