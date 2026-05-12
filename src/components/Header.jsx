@@ -51,6 +51,7 @@ export default function Header({ navigate, currentPage }) {
   const navLinks = [
     { label:"HOME",        page:"home"        },
     { label:"QUEUE",       page:"queue"       },
+    { label:"CHAT",        page:"chat"        },
     { label:"LEADERBOARD", page:"leaderboard" },
     { label:"ABOUT",       page:"about"       },
   ];

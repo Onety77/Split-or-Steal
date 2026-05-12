@@ -8,23 +8,24 @@ import Queue             from "./pages/Queue";
 import About             from "./pages/About";
 import Duel              from "./pages/Duel";
 import Leaderboard       from "./pages/Leaderboard";
+import Chat              from "./pages/Chat";
 
 function useRouter() {
   const getPage = () => {
     const p = window.location.pathname.replace("/","") || "home";
-    return ["home","auth","queue","about","duel","leaderboard"].includes(p) ? p : "home";
+    return ["home","auth","queue","about","duel","leaderboard","chat"].includes(p) ? p : "home";
   };
   const [page, setPage] = useState(getPage);
   const navigate = (to) => {
-    window.history.pushState(null,"", to === "home" ? "/" : "/" + to);
+    window.history.pushState(null,"", to === "home" ? "/" : "/"+to);
     setPage(to);
     window.scrollTo(0,0);
   };
-  useEffect(() => {
+  useEffect(()=>{
     const h = () => setPage(getPage());
     window.addEventListener("popstate", h);
     return () => window.removeEventListener("popstate", h);
-  }, []);
+  },[]);
   return { page, navigate };
 }
 
@@ -40,6 +41,7 @@ function AppInner() {
       {page === "about"       && <About       navigate={navigate}/>}
       {page === "duel"        && <Duel        navigate={navigate}/>}
       {page === "leaderboard" && <Leaderboard navigate={navigate}/>}
+      {page === "chat"        && <Chat        navigate={navigate}/>}
     </>
   );
 }
