@@ -19,7 +19,7 @@ const GAS_RESERVE_SOL = parseFloat(process.env.GAS_RESERVE_SOL || "0.002");
 const READY_WINDOW_MS = 45 * 1000;
 const CHAT_MS         = 1.5 * 60 * 1000;
 const VOTE_MAX_MS     = 1 * 60 * 1000;
-const CYCLE_MS        = 3 * 60 * 1000;
+const CYCLE_MS        = 5 * 60 * 1000;
 
 // ── STARTUP CHECKS ──────────────────────────────────────────────────────────
 const missing = ["CREATOR_PRIVATE_KEY","FIREBASE_SERVICE_ACCOUNT_JSON","CREATOR_WALLET","TOKEN_CA"]
