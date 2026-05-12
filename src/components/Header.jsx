@@ -3,7 +3,7 @@ import { useAuth } from "../context/AuthContext";
 import { doc, deleteDoc, onSnapshot } from "firebase/firestore";
 import { db } from "../firebase";
 
-const DUEL_INTERVAL = 10 * 60 * 1000;
+const DUEL_INTERVAL = 5 * 60 * 1000;
 
 export default function Header({ navigate, currentPage }) {
   const { user, profile, signOut } = useAuth();
