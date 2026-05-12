@@ -407,6 +407,38 @@ async function runRound() {
     await batch.commit();
     log("Round " + thisRound + " complete and committed.");
 
+    // Update user stats on sos_users documents
+    try {
+      var userBatch = db.batch();
+
+      // P1 stats
+      var p1Earned = 0;
+      if (outcome === "BOTH_SPLIT") p1Earned = lockedSOL / 2;
+      if (outcome === "P1_STEAL")   p1Earned = lockedSOL;
+      userBatch.set(db.doc("sos_users/" + p1.uid), {
+        splits:      vote1 === "SPLIT" ? FieldValue.increment(1) : FieldValue.increment(0),
+        steals:      vote1 === "STEAL" ? FieldValue.increment(1) : FieldValue.increment(0),
+        totalEarned: FieldValue.increment(p1Earned),
+        wins:        FieldValue.increment(p1Earned > 0 ? 1 : 0),
+      }, { merge: true });
+
+      // P2 stats
+      var p2Earned = 0;
+      if (outcome === "BOTH_SPLIT") p2Earned = lockedSOL / 2;
+      if (outcome === "P2_STEAL")   p2Earned = lockedSOL;
+      userBatch.set(db.doc("sos_users/" + p2.uid), {
+        splits:      vote2 === "SPLIT" ? FieldValue.increment(1) : FieldValue.increment(0),
+        steals:      vote2 === "STEAL" ? FieldValue.increment(1) : FieldValue.increment(0),
+        totalEarned: FieldValue.increment(p2Earned),
+        wins:        FieldValue.increment(p2Earned > 0 ? 1 : 0),
+      }, { merge: true });
+
+      await userBatch.commit();
+      log("User stats updated.");
+    } catch (e) {
+      log("User stats update failed: " + e.message);
+    }
+
     try {
       var gs = await db.doc("sos_stats/global").get();
       if (gs.exists && lockedSOL > (gs.data().biggestPot || 0)) {
