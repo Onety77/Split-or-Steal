@@ -16,10 +16,10 @@ const TOKEN_CA        = process.env.TOKEN_CA;
 const SOLANA_RPC      = process.env.SOLANA_RPC || "https://api.mainnet-beta.solana.com";
 const GAS_RESERVE_SOL = parseFloat(process.env.GAS_RESERVE_SOL || "0.002");
 
-const READY_WINDOW_MS = 60 * 1000;   // max time to wait for both to click ready
-const CHAT_MS         =  3 * 60 * 1000;  // fixed 3min chat phase
-const VOTE_MAX_MS     =  2 * 60 * 1000;  // max 2min vote — ends early if both vote
-const CYCLE_MS        = 5 * 60 * 1000;  // base 10min cycle
+const READY_WINDOW_MS = 45 * 1000;   // max time to wait for both to click ready
+const CHAT_MS         =  1.5 * 60 * 1000;  // fixed 3min chat phase
+const VOTE_MAX_MS     =  1 * 60 * 1000;  // max 2min vote — ends early if both vote
+const CYCLE_MS        = 3 * 60 * 1000;  // base 10min cycle
 
 // ── STARTUP CHECKS ──────────────────────────────────────────────────────────
 const missing = ["CREATOR_PRIVATE_KEY","FIREBASE_SERVICE_ACCOUNT_JSON","CREATOR_WALLET","TOKEN_CA"]
