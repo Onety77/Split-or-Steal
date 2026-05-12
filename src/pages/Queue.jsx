@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import {
   collection, query, orderBy, onSnapshot, doc,
-  setDoc, deleteDoc, serverTimestamp,
+  setDoc, deleteDoc, serverTimestamp, getDoc,
 } from "firebase/firestore";
 import { db } from "../firebase";
 import { useAuth } from "../context/AuthContext";
@@ -12,37 +12,50 @@ const ST_API_KEY= "7e03dd01-b931-4fac-8e9f-06a310c1238a";
 const MIN_USD   = 10;
 
 const positionLabel = (pos) => {
-  if (pos === 1) return "NEXT UP";
-  if (pos === 2) return "NEXT UP";
+  if (pos === 1 || pos === 2) return "NEXT UP";
   return "#" + pos + " IN QUEUE";
 };
 
-// Check if wallet still holds $10+ of the token
+// Verify wallet holds $10+ — checks SolanaTracker holders pages
 async function verifyHolding(wallet) {
-  for (let page = 1; page <= 5; page++) {
+  const walletLower = wallet.toLowerCase();
+  for (let page = 1; page <= 10; page++) {
     try {
-      const res  = await fetch(
+      const res = await fetch(
         "https://data.solanatracker.io/tokens/" + TOKEN_CA + "/holders?page=" + page + "&limit=100",
         { headers: { "x-api-key": ST_API_KEY } }
       );
+
+      if (!res.ok) {
+        // API error — block to be safe
+        return { found: false, usd: 0, error: "API error " + res.status };
+      }
+
       const raw  = await res.json();
       const list = raw.holders ?? raw.accounts ?? raw.items
                 ?? raw.wallets ?? (Array.isArray(raw) ? raw : null);
 
       if (!list || list.length === 0) break;
 
-      const match = list.find(h => {
-        const w = h.address || h.owner || h.wallet || h.pubkey || null;
-        return w && w.toLowerCase() === wallet.toLowerCase();
-      });
-
-      if (match) {
-        const usd = match.value?.usd ?? match.valueUsd ?? match.usd ?? 0;
-        return { found: true, usd };
+      for (const h of list) {
+        const w = (h.address || h.owner || h.wallet || h.pubkey || "").toLowerCase();
+        if (w === walletLower) {
+          // Try every possible USD value field
+          const usd = h.value?.usd
+                   ?? h.valueUsd
+                   ?? h.usd
+                   ?? h.usdValue
+                   ?? h.worth
+                   ?? h.worth_usd
+                   ?? 0;
+          return { found: true, usd: parseFloat(usd) || 0 };
+        }
       }
 
-      if (list.length < 100) break;
-    } catch { break; }
+      if (list.length < 100) break; // no more pages
+    } catch (e) {
+      return { found: false, usd: 0, error: e.message };
+    }
   }
   return { found: false, usd: 0 };
 }
@@ -50,11 +63,11 @@ async function verifyHolding(wallet) {
 export default function Queue({ navigate }) {
   const { user, profile } = useAuth();
 
-  const [queueList,  setQueueList]  = useState([]);
-  const [myEntry,    setMyEntry]    = useState(null);
-  const [joining,    setJoining]    = useState(false);
-  const [verifying,  setVerifying]  = useState(false);
-  const [joinError,  setJoinError]  = useState("");
+  const [queueList, setQueueList] = useState([]);
+  const [myEntry,   setMyEntry]   = useState(null);
+  const [joining,   setJoining]   = useState(false);
+  const [verifying, setVerifying] = useState(false);
+  const [joinError, setJoinError] = useState("");
 
   useEffect(() => {
     const q = query(collection(db, "sos_queue"), orderBy("joinedAt","asc"));
@@ -77,14 +90,22 @@ export default function Queue({ navigate }) {
     setVerifying(true);
 
     try {
-      // Verify wallet still holds $10+ before joining
-      const { found, usd } = await verifyHolding(profile.wallet);
+      const { found, usd, error } = await verifyHolding(profile.wallet);
 
-      if (!found || usd < MIN_USD) {
-        setJoinError(
-          "You need to hold at least $" + MIN_USD + " worth of $SOS to join. " +
-          (found ? "Your current holding: $" + usd.toFixed(2) + "." : "Wallet not found in holders list.")
-        );
+      if (error) {
+        setJoinError("Could not verify your holdings right now. Please try again in a moment.");
+        setVerifying(false);
+        return;
+      }
+
+      if (!found) {
+        setJoinError("Your wallet was not found in the $SOS holder list. You need to hold at least $" + MIN_USD + " worth of $SOS to play.");
+        setVerifying(false);
+        return;
+      }
+
+      if (usd < MIN_USD) {
+        setJoinError("You need at least $" + MIN_USD + " worth of $SOS to join. Your current holding: $" + usd.toFixed(2) + ".");
         setVerifying(false);
         return;
       }
@@ -140,7 +161,6 @@ export default function Queue({ navigate }) {
 
           {/* LEFT */}
           <div>
-
             {user && profile && (
               <div style={{ marginBottom:16 }}>
                 {!myEntry ? (
@@ -151,7 +171,7 @@ export default function Queue({ navigate }) {
                         <div style={{ fontFamily:"'Oswald',sans-serif", fontSize:16, color:"var(--dim)" }}>Not in queue</div>
                         {verifying && (
                           <div style={{ fontFamily:"'Barlow',sans-serif", fontSize:12, color:"var(--muted)", marginTop:4 }}>
-                            Checking your holdings...
+                            Checking your $SOS holdings...
                           </div>
                         )}
                       </div>
@@ -160,15 +180,7 @@ export default function Queue({ navigate }) {
                       </button>
                     </div>
                     {joinError && (
-                      <div style={{
-                        marginTop:4,
-                        padding:"10px 14px",
-                        background:"rgba(204,32,32,0.08)",
-                        border:"1px solid rgba(204,32,32,0.2)",
-                        borderRadius:8,
-                        fontFamily:"'Barlow',sans-serif",
-                        fontSize:13, color:"var(--red2)", lineHeight:1.5,
-                      }}>
+                      <div style={{ padding:"10px 14px", background:"rgba(204,32,32,0.08)", border:"1px solid rgba(204,32,32,0.2)", borderRadius:8, fontFamily:"'Barlow',sans-serif", fontSize:13, color:"var(--red2)", lineHeight:1.5 }}>
                         {joinError}
                       </div>
                     )}
@@ -182,19 +194,13 @@ export default function Queue({ navigate }) {
                         </div>
                         <div style={{ fontFamily:"'Oswald',sans-serif", fontSize:18, color:"var(--text)" }}>{profile.username}</div>
                         {estimatedWait !== null && estimatedWait > 0 && (
-                          <div style={{ fontSize:12, color:"var(--dim)", marginTop:4, fontFamily:"'Barlow',sans-serif" }}>
-                            ~{estimatedWait} min estimated wait
-                          </div>
+                          <div style={{ fontSize:12, color:"var(--dim)", marginTop:4, fontFamily:"'Barlow',sans-serif" }}>~{estimatedWait} min estimated wait</div>
                         )}
                         {(myPosition === 1 || myPosition === 2) && (
-                          <div style={{ fontSize:12, color:"var(--gold)", marginTop:4, fontFamily:"'Barlow',sans-serif" }}>
-                            ⚡ Your duel is starting soon — stay ready!
-                          </div>
+                          <div style={{ fontSize:12, color:"var(--gold)", marginTop:4, fontFamily:"'Barlow',sans-serif" }}>⚡ Your duel is starting soon — stay ready!</div>
                         )}
                       </div>
-                      <button onClick={leaveQueue} className="btn-outline" style={{ color:"var(--red2)", borderColor:"rgba(204,32,32,0.3)", fontSize:12 }}>
-                        LEAVE
-                      </button>
+                      <button onClick={leaveQueue} className="btn-outline" style={{ color:"var(--red2)", borderColor:"rgba(204,32,32,0.3)", fontSize:12 }}>LEAVE</button>
                     </div>
                   </div>
                 ) : myEntry.status === "ready" ? (
@@ -215,9 +221,7 @@ export default function Queue({ navigate }) {
               <div className="card" style={{ border:"1px solid rgba(255,184,0,0.2)", textAlign:"center", marginBottom:16, padding:"32px" }}>
                 <div style={{ fontSize:32, marginBottom:14 }}>🎯</div>
                 <div style={{ fontFamily:"'Oswald',sans-serif", fontSize:18, letterSpacing:2, color:"var(--text)", marginBottom:10 }}>SIGN IN TO JOIN</div>
-                <p style={{ fontSize:13, color:"var(--muted)", marginBottom:20, fontFamily:"'Barlow',sans-serif" }}>
-                  Create an account to enter the queue and play.
-                </p>
+                <p style={{ fontSize:13, color:"var(--muted)", marginBottom:20, fontFamily:"'Barlow',sans-serif" }}>Create an account to enter the queue and play.</p>
                 <button onClick={() => navigate("auth")} className="btn-gold">SIGN IN / SIGN UP</button>
               </div>
             )}
@@ -225,7 +229,7 @@ export default function Queue({ navigate }) {
             <div className="card" style={{ padding:"20px 24px" }}>
               <div className="label" style={{ marginBottom:14, color:"var(--muted)" }}>HOW THE QUEUE WORKS</div>
               {[
-                ["01","Sign in and click Join Queue. Your username appears in the live list."],
+                ["01","Sign in and click Join Queue. Holdings are verified every time you join."],
                 ["02","Every 10 minutes, the top 2 in queue are called to duel."],
                 ["03","A full-screen alert fires with sound — 90 seconds to click READY or you are ejected."],
                 ["04","READY unlocks the chat room. Vote in secret. Reveal happens simultaneously."],
@@ -263,39 +267,18 @@ export default function Queue({ navigate }) {
                     entry.status === "ready"       ? "✓" :
                     entry.status === "ready_check" ? "⏳" :
                     entry.status === "in_duel"     ? "⚔️" : null;
-
                   return (
-                    <div key={entry.id} style={{
-                      display:"flex", alignItems:"center", gap:14,
-                      padding:"14px 18px", borderRadius:10,
-                      background: isMe ? "rgba(255,184,0,0.08)" : isTop ? "rgba(255,255,255,0.03)" : "rgba(255,255,255,0.015)",
-                      border:"1px solid " + (isMe ? "rgba(255,184,0,0.3)" : isTop ? "rgba(255,184,0,0.12)" : "rgba(255,255,255,0.05)"),
-                      animation:"slide-up 0.4s ease " + (i*0.04) + "s both",
-                    }}>
-                      <div style={{ width:28, height:28, borderRadius:"50%", display:"flex", alignItems:"center", justifyContent:"center", background: isTop ? "rgba(255,184,0,0.15)" : "rgba(255,255,255,0.04)", fontFamily:"'Russo One',sans-serif", fontSize:12, color: isTop ? "var(--gold)" : "var(--dim)", flexShrink:0 }}>
-                        {i + 1}
-                      </div>
+                    <div key={entry.id} style={{ display:"flex", alignItems:"center", gap:14, padding:"14px 18px", borderRadius:10, background: isMe ? "rgba(255,184,0,0.08)" : isTop ? "rgba(255,255,255,0.03)" : "rgba(255,255,255,0.015)", border:"1px solid " + (isMe ? "rgba(255,184,0,0.3)" : isTop ? "rgba(255,184,0,0.12)" : "rgba(255,255,255,0.05)"), animation:"slide-up 0.4s ease " + (i*0.04) + "s both" }}>
+                      <div style={{ width:28, height:28, borderRadius:"50%", display:"flex", alignItems:"center", justifyContent:"center", background: isTop ? "rgba(255,184,0,0.15)" : "rgba(255,255,255,0.04)", fontFamily:"'Russo One',sans-serif", fontSize:12, color: isTop ? "var(--gold)" : "var(--dim)", flexShrink:0 }}>{i+1}</div>
                       <div style={{ flex:1, minWidth:0 }}>
                         <div style={{ fontFamily:"'Oswald',sans-serif", fontSize:15, fontWeight:600, color: isMe ? "var(--gold)" : "var(--text)", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
-                          {entry.username}
-                          {isMe && <span style={{ fontSize:10, color:"var(--muted)", marginLeft:8 }}>(you)</span>}
+                          {entry.username}{isMe && <span style={{ fontSize:10, color:"var(--muted)", marginLeft:8 }}>(you)</span>}
                         </div>
-                        {isTop && (
-                          <div style={{ fontSize:10, color:"var(--gold)", letterSpacing:2, fontFamily:"'Oswald',sans-serif", marginTop:2 }}>
-                            NEXT UP
-                          </div>
-                        )}
+                        {isTop && <div style={{ fontSize:10, color:"var(--gold)", letterSpacing:2, fontFamily:"'Oswald',sans-serif", marginTop:2 }}>NEXT UP</div>}
                       </div>
                       {statusIcon && (
-                        <div style={{
-                          fontFamily:"'Oswald',sans-serif", fontSize:11, fontWeight:600, letterSpacing:1,
-                          color: entry.status==="ready" ? "var(--green)" : entry.status==="in_duel" ? "var(--gold)" : "var(--muted)",
-                          background: entry.status==="ready" ? "rgba(0,200,83,0.1)" : entry.status==="in_duel" ? "rgba(255,184,0,0.1)" : "rgba(255,255,255,0.04)",
-                          border:"1px solid " + (entry.status==="ready" ? "rgba(0,200,83,0.25)" : entry.status==="in_duel" ? "rgba(255,184,0,0.25)" : "rgba(255,255,255,0.08)"),
-                          borderRadius:20, padding:"4px 10px", flexShrink:0,
-                        }}>
-                          {statusIcon}{" "}
-                          {entry.status==="ready" ? "READY" : entry.status==="in_duel" ? "DUELING" : "WAITING"}
+                        <div style={{ fontFamily:"'Oswald',sans-serif", fontSize:11, fontWeight:600, letterSpacing:1, color: entry.status==="ready" ? "var(--green)" : entry.status==="in_duel" ? "var(--gold)" : "var(--muted)", background: entry.status==="ready" ? "rgba(0,200,83,0.1)" : entry.status==="in_duel" ? "rgba(255,184,0,0.1)" : "rgba(255,255,255,0.04)", border:"1px solid " + (entry.status==="ready" ? "rgba(0,200,83,0.25)" : entry.status==="in_duel" ? "rgba(255,184,0,0.25)" : "rgba(255,255,255,0.08)"), borderRadius:20, padding:"4px 10px", flexShrink:0 }}>
+                          {statusIcon}{" "}{entry.status==="ready" ? "READY" : entry.status==="in_duel" ? "DUELING" : "WAITING"}
                         </div>
                       )}
                     </div>
