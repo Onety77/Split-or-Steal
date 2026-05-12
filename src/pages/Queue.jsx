@@ -1,63 +1,47 @@
 import { useState, useEffect } from "react";
 import {
   collection, query, orderBy, onSnapshot, doc,
-  setDoc, deleteDoc, serverTimestamp, getDoc,
+  setDoc, deleteDoc, serverTimestamp,
 } from "firebase/firestore";
 import { db } from "../firebase";
 import { useAuth } from "../context/AuthContext";
 import { requestNotificationPermission } from "../components/ReadyCheckOverlay";
+import { Connection, PublicKey } from "@solana/web3.js";
 
 const TOKEN_CA  = "13SVgpzFcZf8vF6Tg1QV7vec82FdJrf4Kg2VEX4xpump";
-const ST_API_KEY= "7e03dd01-b931-4fac-8e9f-06a310c1238a";
-const MIN_USD   = 10;
+const SOLANA_RPC = "https://api.mainnet-beta.solana.com";
+const MIN_TOKENS = 0; // any amount of tokens qualifies
 
 const positionLabel = (pos) => {
   if (pos === 1 || pos === 2) return "NEXT UP";
   return "#" + pos + " IN QUEUE";
 };
 
-// Verify wallet holds $10+ — checks SolanaTracker holders pages
+// Verify wallet holds the token directly on-chain via Solana RPC
+// Much more reliable than SolanaTracker — reads actual token accounts
 async function verifyHolding(wallet) {
-  const walletLower = wallet.toLowerCase();
-  for (let page = 1; page <= 10; page++) {
-    try {
-      const res = await fetch(
-        "https://data.solanatracker.io/tokens/" + TOKEN_CA + "/holders?page=" + page + "&limit=100",
-        { headers: { "x-api-key": ST_API_KEY } }
-      );
+  try {
+    const connection  = new Connection(SOLANA_RPC, "confirmed");
+    const mintPubkey  = new PublicKey(TOKEN_CA);
+    const walletPubkey= new PublicKey(wallet);
 
-      if (!res.ok) {
-        // API error — block to be safe
-        return { found: false, usd: 0, error: "API error " + res.status };
-      }
+    const tokenAccounts = await connection.getParsedTokenAccountsByOwner(
+      walletPubkey,
+      { mint: mintPubkey }
+    );
 
-      const raw  = await res.json();
-      const list = raw.holders ?? raw.accounts ?? raw.items
-                ?? raw.wallets ?? (Array.isArray(raw) ? raw : null);
-
-      if (!list || list.length === 0) break;
-
-      for (const h of list) {
-        const w = (h.address || h.owner || h.wallet || h.pubkey || "").toLowerCase();
-        if (w === walletLower) {
-          // Try every possible USD value field
-          const usd = h.value?.usd
-                   ?? h.valueUsd
-                   ?? h.usd
-                   ?? h.usdValue
-                   ?? h.worth
-                   ?? h.worth_usd
-                   ?? 0;
-          return { found: true, usd: parseFloat(usd) || 0 };
-        }
-      }
-
-      if (list.length < 100) break; // no more pages
-    } catch (e) {
-      return { found: false, usd: 0, error: e.message };
+    if (tokenAccounts.value.length === 0) {
+      return { holds: false, amount: 0 };
     }
+
+    const amount = tokenAccounts.value[0].account.data.parsed.info.tokenAmount.uiAmount || 0;
+    return { holds: amount > MIN_TOKENS, amount };
+
+  } catch (e) {
+    // RPC error — let them through rather than blocking real holders
+    console.warn("Token verification error:", e.message);
+    return { holds: true, amount: 0, skipped: true };
   }
-  return { found: false, usd: 0 };
 }
 
 export default function Queue({ navigate }) {
@@ -90,22 +74,10 @@ export default function Queue({ navigate }) {
     setVerifying(true);
 
     try {
-      const { found, usd, error } = await verifyHolding(profile.wallet);
+      const { holds, amount, skipped } = await verifyHolding(profile.wallet);
 
-      if (error) {
-        setJoinError("Could not verify your holdings right now. Please try again in a moment.");
-        setVerifying(false);
-        return;
-      }
-
-      if (!found) {
-        setJoinError("Your wallet was not found in the $SOS holder list. You need to hold at least $" + MIN_USD + " worth of $SOS to play.");
-        setVerifying(false);
-        return;
-      }
-
-      if (usd < MIN_USD) {
-        setJoinError("You need at least $" + MIN_USD + " worth of $SOS to join. Your current holding: $" + usd.toFixed(2) + ".");
+      if (!holds && !skipped) {
+        setJoinError("You need to hold $SOS tokens to join the queue. Your wallet shows 0 tokens.");
         setVerifying(false);
         return;
       }
