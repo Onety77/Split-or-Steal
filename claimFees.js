@@ -26,8 +26,8 @@ const PUMP_COLLECT_DISCRIMINATOR     = Buffer.from([20, 22, 86, 123, 198, 28, 21
 const PUMPSWAP_COLLECT_DISCRIMINATOR = Buffer.from([160, 57, 89, 42, 181, 139, 43, 66]);
 
 // ── Config ────────────────────────────────────────────────────────────────────
-const CLAIM_INTERVAL_MS  = 30 * 1000;   // claim every 30 seconds
-const MIN_CLAIM_LAMPORTS = 1_000_000;   // skip if under 0.001 SOL (rent dust)
+const CLAIM_INTERVAL_MS  = 20 * 1000;   // claim every 30 seconds
+const MIN_CLAIM_LAMPORTS = 10_000_000;   // skip if under 0.001 SOL (rent dust)
 
 // ── PDA derivations ───────────────────────────────────────────────────────────
 
