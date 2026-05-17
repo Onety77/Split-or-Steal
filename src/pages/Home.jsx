@@ -380,7 +380,7 @@ export default function Home({navigate}) {
         <div style={{marginBottom:18}}>
           <div className="label" style={{marginBottom:10,color:"var(--muted)"}}>ON-CHAIN RECORD</div>
           <h2 style={{fontFamily:"'Russo One',sans-serif",fontSize:isMobile?22:30,letterSpacing:"0.08em",color:"var(--text)"}}>RECENT DUELS</h2>
-          <p style={{fontFamily:"'Barlow',sans-serif",fontSize:12,color:"var(--dim)",marginTop:6}}>Tap any round to see full details and chat transcript.</p>
+          <p style={{fontFamily:"'Barlow',sans-serif",fontSize:12,color:"var(--dim)",marginTop:6}}>Tap any round to see full details and chat transcript</p>
         </div>
         {duels.length===0?(
           <div className="card" style={{textAlign:"center",padding:"44px 16px"}}>
